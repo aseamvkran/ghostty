@@ -289,7 +289,6 @@ pub fn performAction(
 ) !bool {
     switch (action) {
         .quit => {
-            log.info("performAction: .quit called", .{});
             windows.PostQuitMessage(0);
             return true;
         },
@@ -509,15 +508,11 @@ fn closeTabAt(self: *App, idx: usize) void {
 /// If it was the last surface in the tab, closes the tab.
 /// If it was the last tab, quits the application.
 pub fn closeSurface(self: *App, surface: *Surface) void {
-    log.info("closeSurface called: surface={x}, tabs={d}", .{ @intFromPtr(surface), self.tabs.items.len });
     // Find which tab contains this surface
     for (self.tabs.items, 0..) |*tab, tab_idx| {
         if (tabContainsSurface(tab.root, surface)) {
-            log.info("found surface in tab {d}", .{tab_idx});
             const still_alive = tab.removeSurface(surface);
-            log.info("tab still alive: {}", .{still_alive});
             self.destroySurface(surface);
-            log.info("surface destroyed", .{});
 
             if (!still_alive) {
                 // Last surface in this tab, close the tab
@@ -1560,7 +1555,6 @@ fn wndProc(
 ) callconv(windows.WINAPI) windows.LRESULT {
     switch (msg) {
         windows.WM_CLOSE => {
-            log.info("WM_CLOSE received, posting quit", .{});
             windows.PostQuitMessage(0);
             return 0;
         },

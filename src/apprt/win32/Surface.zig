@@ -412,6 +412,9 @@ fn surfaceWndProc(
         windows.WM_LBUTTONDOWN,
         windows.WM_MBUTTONDOWN,
         => {
+            // WS_CHILD windows don't receive keyboard focus automatically
+            // on click — we must call SetFocus explicitly.
+            _ = windows.SetFocus(hwnd);
             if (self.core_surface) |cs| {
                 const button: input.MouseButton = if (msg == windows.WM_LBUTTONDOWN) .left else .middle;
                 const mods = App.getModifiers();
