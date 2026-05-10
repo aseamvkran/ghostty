@@ -34,8 +34,30 @@ li{margin-bottom:.4rem}
 <h1>Changelog</h1>
 <p>Complete history of the Windows port, from initial research to current state.</p>
 
+<h2>Commit 5: Focus &amp; Repaint Fixes</h2>
+<p class="commit">c867d7c98 + (this commit)</p>
+
+<div class="card">
+<h3>Bugs Fixed</h3>
+<ul>
+<li><span class="tag tag-fix">FIX</span> <strong>Keyboard focus stuck on newest pane</strong> — Clicking an older split pane did not move keyboard focus to it. WS_CHILD windows require an explicit <code>SetFocus(hwnd)</code> on mouse click. Added the call in the <code>WM_LBUTTONDOWN</code>/<code>WM_MBUTTONDOWN</code> handler of <code>surfaceWndProc</code>.</li>
+<li><span class="tag tag-fix">FIX</span> <strong>Closed pane leaves stale pixels</strong> — After a surface was destroyed, the parent window area it occupied retained old content until another pane was clicked. Fixed by calling <code>InvalidateRect(hwnd, null, TRUE)</code> on the main window after <code>updateLayout()</code> in <code>closeSurface()</code>.</li>
+</ul>
+
+<h3>Cleanup</h3>
+<ul>
+<li>Removed debug <code>log.info</code> calls from <code>closeSurface()</code>, <code>.quit</code> performAction, and <code>WM_CLOSE</code> handler.</li>
+</ul>
+
+<h3>Files Modified</h3>
+<ul>
+<li><span class="tag tag-mod">MOD</span> <code>src/apprt/win32/Surface.zig</code> — added SetFocus(hwnd) in WM_LBUTTONDOWN/WM_MBUTTONDOWN</li>
+<li><span class="tag tag-mod">MOD</span> <code>src/apprt/win32/App.zig</code> — added InvalidateRect after closeSurface layout update, removed debug logging</li>
+</ul>
+</div>
+
 <h2>Commit 4: Surface Close, Tab Bar Fix, ConPTY Crash Fix</h2>
-<p class="commit">(pending commit — current session)</p>
+<p class="commit">179d68a75</p>
 
 <div class="card">
 <h3>Features Added</h3>
@@ -253,6 +275,18 @@ li{margin-bottom:.4rem}
 <td>Tab bar disappears when switching back to first tab</td>
 <td><code>gotoTab()</code> didn't call <code>updateLayout()</code></td>
 <td>Added <code>self.updateLayout()</code> call in <code>gotoTab()</code></td>
+</tr>
+<tr>
+<td>Focus stuck</td>
+<td>Keyboard input only goes to the newest split pane</td>
+<td>WS_CHILD windows don't auto-focus on click</td>
+<td>Added <code>SetFocus(hwnd)</code> in <code>WM_LBUTTONDOWN</code>/<code>WM_MBUTTONDOWN</code> handler</td>
+</tr>
+<tr>
+<td>Stale pixels</td>
+<td>Closed pane area not repainted until another pane is clicked</td>
+<td>No <code>InvalidateRect</code> after destroying a surface's child window</td>
+<td>Added <code>InvalidateRect(hwnd, null, TRUE)</code> after <code>updateLayout()</code> in <code>closeSurface()</code></td>
 </tr>
 </table>
 

@@ -533,6 +533,12 @@ pub fn closeSurface(self: *App, surface: *Surface) void {
             self.updateTabVisibility();
             self.invalidateTabBar();
 
+            // Force repaint of the entire client area so stale content
+            // from the destroyed surface's region is cleared.
+            if (self.hwnd) |h| {
+                _ = windows.InvalidateRect(h, null, 1);
+            }
+
             // Focus the remaining surface
             if (self.tabs.items.len > self.active_tab) {
                 const active_tab = &self.tabs.items[self.active_tab];
