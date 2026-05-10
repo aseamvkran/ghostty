@@ -34,8 +34,35 @@ li{margin-bottom:.4rem}
 <h1>Changelog</h1>
 <p>Complete history of the Windows port, from initial research to current state.</p>
 
-<h2>Commit 3: Documentation &amp; README</h2>
+<h2>Commit 4: Surface Close, Tab Bar Fix, ConPTY Crash Fix</h2>
 <p class="commit">(pending commit — current session)</p>
+
+<div class="card">
+<h3>Features Added</h3>
+<ul>
+<li><span class="tag tag-new">NEW</span> <strong>App.closeSurface()</strong> — removes a single surface from its tab's split tree; closes the tab only when empty, quits only when last tab closes</li>
+<li><span class="tag tag-new">NEW</span> <strong>App.tabContainsSurface()</strong> — recursive helper to locate a surface in a tab's split tree</li>
+<li><span class="tag tag-new">NEW</span> <strong>WM_CLOSE_SURFACE</strong> — custom Win32 message (WM_USER+2) posted by Surface.close() and dispatched in wndProc to defer surface destruction</li>
+</ul>
+
+<h3>Bugs Fixed</h3>
+<ul>
+<li><span class="tag tag-fix">FIX</span> <strong>Exit crashes entire app</strong> — Typing <code>exit</code> in a shell pane crashed the whole process. Root cause: the IO reader thread's <code>ReadFile</code> on the ConPTY output pipe returns <code>ERROR_BROKEN_PIPE</code> when the child exits, which hit an <code>unreachable</code>. Fixed by handling <code>.BROKEN_PIPE</code> to exit the read thread gracefully (<code>src/termio/Exec.zig</code>).</li>
+<li><span class="tag tag-fix">FIX</span> <strong>Surface.close() was a no-op</strong> — Previously did nothing (TODO stub). Now posts <code>WM_CLOSE_SURFACE</code> to the main window, passing the surface pointer via wParam. This defers destruction to after <code>tick()</code> completes, avoiding use-after-free.</li>
+<li><span class="tag tag-fix">FIX</span> <strong>.closed handler set app.running=false</strong> — The <code>.closed</code> return from <code>keyCallback</code> in Surface.zig was setting <code>app.running = false</code>, immediately quitting the app. Changed to a no-op since the core already calls <code>rt_surface.close()</code> before returning <code>.closed</code>.</li>
+<li><span class="tag tag-fix">FIX</span> <strong>Tab bar hidden after switching</strong> — Switching from a multi-tab state back to the first tab didn't update layout. Fixed by calling <code>updateLayout()</code> in <code>gotoTab()</code>.</li>
+</ul>
+
+<h3>Files Modified</h3>
+<ul>
+<li><span class="tag tag-mod">MOD</span> <code>src/apprt/win32/App.zig</code> — added WM_CLOSE_SURFACE constant, closeSurface(), tabContainsSurface(), WM_CLOSE_SURFACE handler in wndProc, updateLayout in gotoTab</li>
+<li><span class="tag tag-mod">MOD</span> <code>src/apprt/win32/Surface.zig</code> — implemented close() with PostMessageW, changed .closed handler from app.running=false to no-op</li>
+<li><span class="tag tag-mod">MOD</span> <code>src/termio/Exec.zig</code> — added .BROKEN_PIPE handler in threadMainWindows ReadFile error switch</li>
+</ul>
+</div>
+
+<h2>Commit 3: Documentation &amp; README</h2>
+<p class="commit">(pending commit — earlier this session)</p>
 
 <div class="card">
 <h3>Changes</h3>
@@ -202,6 +229,30 @@ li{margin-bottom:.4rem}
 <td>Terminal renders with wrong font</td>
 <td>Config had "Maple Mono NF" but only "Maple Mono NF CN" installed</td>
 <td>Updated config file font-family</td>
+</tr>
+<tr>
+<td>Exit crash</td>
+<td>Typing <code>exit</code> kills the entire application instead of just the pane</td>
+<td>ConPTY pipe returns <code>ERROR_BROKEN_PIPE</code> on child exit, hitting <code>unreachable</code> in the IO reader thread</td>
+<td>Added <code>.BROKEN_PIPE</code> handler in <code>threadMainWindows</code> to exit reader thread gracefully</td>
+</tr>
+<tr>
+<td>Close no-op</td>
+<td>Surface.close() did nothing (TODO stub)</td>
+<td>No implementation — <code>close</code> was an empty function</td>
+<td>Posts <code>WM_CLOSE_SURFACE</code> to main window; App.closeSurface() removes from split tree</td>
+</tr>
+<tr>
+<td>.closed quit</td>
+<td>Any key press after child exit quits the app</td>
+<td><code>.closed</code> handler in Surface set <code>app.running = false</code></td>
+<td>Changed to no-op — core already called <code>rt_surface.close()</code></td>
+</tr>
+<tr>
+<td>Tab bar hidden</td>
+<td>Tab bar disappears when switching back to first tab</td>
+<td><code>gotoTab()</code> didn't call <code>updateLayout()</code></td>
+<td>Added <code>self.updateLayout()</code> call in <code>gotoTab()</code></td>
 </tr>
 </table>
 

@@ -1795,6 +1795,15 @@ pub const ReadThread = struct {
                         // Check for a quit signal
                         .OPERATION_ABORTED => break,
 
+                        // When the child process exits, the ConPTY
+                        // pipe is closed and ReadFile returns
+                        // ERROR_BROKEN_PIPE. Exit the read thread
+                        // gracefully.
+                        .BROKEN_PIPE => {
+                            log.info("pty pipe closed (child exited), read thread exiting", .{});
+                            return;
+                        },
+
                         else => {
                             log.err("io reader error err={}", .{err});
                             unreachable;

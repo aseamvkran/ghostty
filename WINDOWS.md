@@ -95,11 +95,36 @@ See [docs/windows-port/](docs/windows-port/) for detailed HTML documentation.
 | Theme support | ✅ |
 | Config reload | ✅ |
 | Navigate/equalize splits | ✅ |
+| Graceful surface close (exit in pane) | ✅ |
 | Keyboard/mouse input | ✅ |
 | Clipboard (copy/paste) | ✅ |
 | DPI awareness | 🔧 Planned |
 | Multiple windows | 🔧 Planned |
 | Split zoom | 🔧 Planned |
+
+## Bug Fixes (Post-Initial)
+
+### Surface close / ConPTY pipe crash
+
+Typing `exit` in a shell pane used to crash the entire application.
+The root cause was in the IO reader thread (`src/termio/Exec.zig`):
+when a ConPTY child process exits, Windows closes the output pipe and
+`ReadFile` returns `ERROR_BROKEN_PIPE`. This error was unhandled and
+hit an `unreachable`, crashing the process.
+
+The fix adds a `.BROKEN_PIPE` handler that exits the read thread
+gracefully, allowing the normal `childExited` → `closeSurface` flow
+to remove only the affected pane.
+
+Additional changes in this fix:
+
+- **`Surface.close()`** now posts `WM_CLOSE_SURFACE` to the main
+  window, deferring destruction until after the core's `tick()` completes.
+- **`App.closeSurface()`** walks the tab split tree to find and remove
+  only the target surface. If other surfaces remain in the tab, the tab
+  stays open. Only quits when the last tab's last surface is closed.
+- **Tab bar visibility** fixed when switching back to a single-surface
+  tab (`gotoTab` now calls `updateLayout()`).
 
 ## Credits
 

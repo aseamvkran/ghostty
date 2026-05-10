@@ -234,8 +234,15 @@ pub fn getTitle(_: *Self) ?[:0]const u8 {
     return null;
 }
 
-pub fn close(_: *Self, _: bool) void {
-    // TODO: handle close with confirmation
+pub fn close(self: *Self, _: bool) void {
+    // Post a message to the main window to close this surface.
+    // We use a message rather than calling closeSurface directly because
+    // close() may be called from the core on any thread.
+    if (self.app) |app| {
+        if (app.hwnd) |hwnd| {
+            _ = windows.PostMessageW(hwnd, App.WM_CLOSE_SURFACE, @intFromPtr(self), 0);
+        }
+    }
 }
 
 pub fn supportsClipboard(_: *Self, clipboard: apprt.Clipboard) bool {
@@ -536,9 +543,8 @@ fn handleKeyEvent(self: *Self, action: input.Action, wparam: windows.WPARAM, lpa
 
     switch (effect) {
         .closed => {
-            if (self.app) |app| {
-                app.running = false;
-            }
+            // The core already called rt_surface.close() before returning
+            // .closed, so we don't need to do anything here.
         },
         .consumed, .ignored => {},
     }

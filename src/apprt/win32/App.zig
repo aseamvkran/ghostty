@@ -23,6 +23,10 @@ const log = std.log.scoped(.win32);
 /// GetMessage and run the core app's tick.
 const WM_WAKEUP: u32 = 0x0400 + 1; // WM_USER + 1
 
+/// User-defined message posted by Surface.close() to request the App
+/// close a specific surface. wParam carries the surface pointer.
+pub const WM_CLOSE_SURFACE: u32 = 0x0400 + 2; // WM_USER + 2
+
 /// Tab bar height in pixels.
 const TAB_BAR_HEIGHT: i32 = 30;
 /// Search bar height in pixels.
@@ -285,6 +289,7 @@ pub fn performAction(
 ) !bool {
     switch (action) {
         .quit => {
+            log.info("performAction: .quit called", .{});
             windows.PostQuitMessage(0);
             return true;
         },
@@ -500,6 +505,58 @@ fn closeTabAt(self: *App, idx: usize) void {
     self.invalidateTabBar();
 }
 
+/// Close a single surface. Removes it from its tab's split tree.
+/// If it was the last surface in the tab, closes the tab.
+/// If it was the last tab, quits the application.
+pub fn closeSurface(self: *App, surface: *Surface) void {
+    log.info("closeSurface called: surface={x}, tabs={d}", .{ @intFromPtr(surface), self.tabs.items.len });
+    // Find which tab contains this surface
+    for (self.tabs.items, 0..) |*tab, tab_idx| {
+        if (tabContainsSurface(tab.root, surface)) {
+            log.info("found surface in tab {d}", .{tab_idx});
+            const still_alive = tab.removeSurface(surface);
+            log.info("tab still alive: {}", .{still_alive});
+            self.destroySurface(surface);
+            log.info("surface destroyed", .{});
+
+            if (!still_alive) {
+                // Last surface in this tab, close the tab
+                tab.deinit();
+                _ = self.tabs.orderedRemove(tab_idx);
+
+                if (self.tabs.items.len == 0) {
+                    windows.PostQuitMessage(0);
+                    return;
+                }
+
+                if (self.active_tab >= self.tabs.items.len) {
+                    self.active_tab = self.tabs.items.len - 1;
+                }
+            }
+
+            self.updateLayout();
+            self.updateTabVisibility();
+            self.invalidateTabBar();
+
+            // Focus the remaining surface
+            if (self.tabs.items.len > self.active_tab) {
+                const active_tab = &self.tabs.items[self.active_tab];
+                if (active_tab.focused.child_hwnd) |child| {
+                    _ = windows.SetFocus(child);
+                }
+            }
+            return;
+        }
+    }
+}
+
+fn tabContainsSurface(node: *Tab.SplitNode, surface: *Surface) bool {
+    return switch (node.*) {
+        .leaf => |s| s == surface,
+        .split => |s| tabContainsSurface(s.first, surface) or tabContainsSurface(s.second, surface),
+    };
+}
+
 fn destroySurfacesInTab(self: *App, tab: *Tab) void {
     // Walk the split tree and destroy each surface
     self.destroySurfacesInNode(tab.root);
@@ -534,6 +591,7 @@ fn gotoTab(self: *App, target: apprt.action.GotoTab) void {
     if (new_idx == self.active_tab) return;
     self.active_tab = new_idx;
     self.updateTabVisibility();
+    self.updateLayout();
     self.invalidateTabBar();
 
     // Focus the active tab's focused surface
@@ -1502,6 +1560,7 @@ fn wndProc(
 ) callconv(windows.WINAPI) windows.LRESULT {
     switch (msg) {
         windows.WM_CLOSE => {
+            log.info("WM_CLOSE received, posting quit", .{});
             windows.PostQuitMessage(0);
             return 0;
         },
@@ -1622,6 +1681,13 @@ fn wndProc(
                 app.core_app.tick(app) catch |err| {
                     log.err("core app tick failed: {}", .{err});
                 };
+            }
+            return 0;
+        },
+        WM_CLOSE_SURFACE => {
+            if (getApp(hwnd)) |app| {
+                const surface: *Surface = @ptrFromInt(wparam);
+                app.closeSurface(surface);
             }
             return 0;
         },
