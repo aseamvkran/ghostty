@@ -413,7 +413,20 @@ fn drainMailbox(self: *Thread) !void {
                 grid.set.deref(grid.old_key);
             },
 
-            .resize => |v| self.renderer.setScreenSize(v),
+            .resize => |v| {
+                // On Win32 (and other apprts without automatic viewport management),
+                // we need to explicitly update the OpenGL viewport when the window resizes.
+                if (comptime @hasDecl(apprt.runtime.Surface, "swapBuffers")) {
+                    const gl = @import("opengl");
+                    gl.viewport(
+                        0,
+                        0,
+                        @intCast(v.screen.width),
+                        @intCast(v.screen.height),
+                    ) catch |err| log.warn("viewport error: {}", .{err});
+                }
+                self.renderer.setScreenSize(v);
+            },
 
             .change_config => |config| {
                 defer config.alloc.destroy(config.thread);
@@ -487,6 +500,12 @@ fn drawFrame(self: *Thread, now: bool) void {
     } else {
         self.renderer.drawFrame(false) catch |err|
             log.warn("error drawing err={}", .{err});
+
+        // On Win32, we need to explicitly swap buffers after rendering
+        // since there's no toolkit managing the GL context for us.
+        if (comptime @hasDecl(apprt.runtime.Surface, "swapBuffers")) {
+            self.surface.swapBuffers();
+        }
     }
 }
 

@@ -43,6 +43,10 @@ pub fn init(b: *std.Build, cfg: *const Config, deps: *const SharedDeps) !Ghostty
     switch (cfg.target.result.os.tag) {
         .windows => {
             exe.subsystem = .Windows;
+            // Override entry point: MSVC CRT defaults to WinMainCRTStartup
+            // for Windows subsystem, but we use standard main(). Force the
+            // linker to use mainCRTStartup which calls main().
+            exe.entry = .{ .symbol_name = "mainCRTStartup" };
             exe.root_module.addWin32ResourceFile(.{
                 .file = b.path("dist/windows/ghostty.rc"),
             });

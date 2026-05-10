@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ghostty Windows Port — Design Document</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --border: #30363d;
+            --text: #c9d1d9;
+            --text-muted: #8b949e;
+            --accent: #58a6ff;
+            --accent2: #7ee787;
+            --warning: #d29922;
+            --danger: #f85149;
+            --code-bg: #1c2128;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 2rem;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+        h1 { color: var(--accent); font-size: 2rem; margin-bottom: 0.5rem; border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; }
+        h2 { color: var(--accent2); font-size: 1.5rem; margin: 2rem 0 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+        h3 { color: var(--accent); font-size: 1.2rem; margin: 1.5rem 0 0.5rem; }
+        p { margin-bottom: 1rem; }
+        code { background: var(--code-bg); padding: 0.2em 0.4em; border-radius: 4px; font-size: 0.9em; color: var(--accent); }
+        pre { background: var(--code-bg); padding: 1rem; border-radius: 8px; overflow-x: auto; margin-bottom: 1rem; border: 1px solid var(--border); }
+        pre code { background: none; padding: 0; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }
+        th, td { padding: 0.75rem; text-align: left; border: 1px solid var(--border); }
+        th { background: var(--surface); color: var(--accent); }
+        tr:nth-child(even) { background: var(--surface); }
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; }
+        .status-done { color: var(--accent2); font-weight: bold; }
+        .status-wip { color: var(--warning); font-weight: bold; }
+        .status-todo { color: var(--danger); font-weight: bold; }
+        .badge { display: inline-block; padding: 0.2em 0.6em; border-radius: 12px; font-size: 0.8em; font-weight: 600; }
+        .badge-done { background: #1b4332; color: var(--accent2); }
+        .badge-wip { background: #3d2e00; color: var(--warning); }
+        .badge-todo { background: #3d1418; color: var(--danger); }
+        ul, ol { margin-left: 1.5rem; margin-bottom: 1rem; }
+        li { margin-bottom: 0.3rem; }
+        .diagram { background: var(--code-bg); padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem; font-family: monospace; white-space: pre; overflow-x: auto; line-height: 1.4; }
+        .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem; }
+        .toc a { color: var(--accent); text-decoration: none; }
+        .toc a:hover { text-decoration: underline; }
+        .toc ol { counter-reset: toc; }
+        .toc li { counter-increment: toc; margin-bottom: 0.4rem; }
+        .note { border-left: 4px solid var(--accent); padding: 1rem; background: var(--surface); margin-bottom: 1rem; border-radius: 0 8px 8px 0; }
+        .warn { border-left: 4px solid var(--warning); padding: 1rem; background: var(--surface); margin-bottom: 1rem; border-radius: 0 8px 8px 0; }
+        .danger { border-left: 4px solid var(--danger); padding: 1rem; background: var(--surface); margin-bottom: 1rem; border-radius: 0 8px 8px 0; }
+        .decision { border-left: 4px solid var(--accent2); padding: 1rem; background: var(--surface); margin-bottom: 1rem; border-radius: 0 8px 8px 0; }
+        hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+    </style>
+</head>
+<body>
+
+<h1>👻 Ghostty Windows Port — Design Document</h1>
+<p style="color: var(--text-muted);">Version 1.0 — May 2026 | Building a full-fledged GPU-accelerated terminal for Windows</p>
+
+<div class="toc">
+    <h3>Table of Contents</h3>
+    <ol>
+        <li><a href="#overview">Executive Overview</a></li>
+        <li><a href="#philosophy">Design Philosophy</a></li>
+        <li><a href="#architecture">Architecture Deep Dive</a></li>
+        <li><a href="#decisions">Tech Stack Decisions</a></li>
+        <li><a href="#existing">Existing Windows Groundwork</a></li>
+        <li><a href="#implementation">Implementation Plan (5 Tiers)</a></li>
+        <li><a href="#gpu">GPU Rendering on Windows</a></li>
+        <li><a href="#edge-cases">Windows Edge Cases & Pitfalls</a></li>
+        <li><a href="#testing">Test Strategy</a></li>
+        <li><a href="#timeline">Development Roadmap</a></li>
+    </ol>
+</div>
+
+<hr>
+
+<h2 id="overview">1. Executive Overview</h2>
+<div class="card">
+    <p><strong>Goal:</strong> Bring Ghostty to Windows as a first-class, GPU-accelerated, native terminal emulator
+    that feels like it was built for Windows — not a Linux port with a Windows wrapper.</p>
+
+    <p><strong>Key insight:</strong> Ghostty's architecture already separates platform-specific code (apprt) from
+    the core terminal emulation (libghostty). The core is ~95% platform-independent. We only need to build
+    the Windows "apprt" layer — the native windowing, input handling, and platform integration.</p>
+
+    <p><strong>Current state:</strong> Significant Windows groundwork already exists in the codebase:
+    ConPTY, Windows PTY, process spawning, font discovery, I/O threads, and build system scaffolding.
+    An open PR (#12403) by <code>@mattn</code> provides a minimal Win32 skeleton that opens a window and runs cmd.exe.</p>
+</div>
+
+<h2 id="philosophy">2. Design Philosophy</h2>
+
+<h3>Ghostty's Core Principles (applied to Windows)</h3>
+<ul>
+    <li><strong>Native:</strong> Use Win32 API directly. No Electron, no GTK-on-Windows, no XAML Islands.
+    The terminal should feel like a Windows app — proper title bar, system menu, DPI awareness,
+    Windows keyboard shortcuts (Ctrl+C for copy, etc.).</li>
+    <li><strong>Fast:</strong> GPU-accelerated rendering via OpenGL (WGL). SIMD-optimized VT parsing.
+    Multi-threaded architecture with dedicated read, write, and render threads.</li>
+    <li><strong>Feature-rich:</strong> Tabs, splits, search, Kitty graphics protocol, Unicode,
+    ligatures — everything the macOS and Linux versions support.</li>
+    <li><strong>Shared core:</strong> Maximum code reuse with the existing Zig core. Only platform-specific
+    code should be new.</li>
+</ul>
+
+<div class="decision">
+    <strong>Decision:</strong> We follow Ghostty's existing pattern — the Linux app uses GTK4 via Zig C API calls,
+    so the Windows app will use Win32 API via Zig (with <code>zigwin32</code> bindings). No C++, no C#,
+    no managed languages. Pure Zig + Win32 C API.
+</div>
+
+<h2 id="architecture">3. Architecture Deep Dive</h2>
+
+<h3>Ghostty's Layered Architecture</h3>
+<div class="diagram">
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Platform GUI Layer                          │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐   │
+│  │  macOS   │  │   GTK    │  │  Win32   │  │     Browser      │   │
+│  │ (Swift)  │  │  (Zig)   │  │  (Zig)   │  │   (WASM/Zig)    │   │
+│  │ AppKit + │  │ GTK4 C   │  │ Win32 API│  │   WebGL         │   │
+│  │ SwiftUI  │  │   API    │  │ via zig- │  │                  │   │
+│  │          │  │          │  │ win32    │  │                  │   │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────────┬─────────┘   │
+│       │             │             │                  │             │
+├───────┴─────────────┴─────────────┴──────────────────┴─────────────┤
+│                         apprt Interface                            │
+│   App.init() | App.run() | App.terminate()                        │
+│   Surface.init() | Surface.getSize() | Surface.clipboard...()     │
+├────────────────────────────────────────────────────────────────────┤
+│                      libghostty Core (Zig)                        │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐  │
+│  │ Terminal │  │   Font   │  │ Renderer │  │     TermIO       │  │
+│  │  Parser  │  │  System  │  │ (Generic)│  │  (PTY + Exec)    │  │
+│  │  (SIMD)  │  │(FreeType)│  │          │  │                  │  │
+│  └──────────┘  └──────────┘  └────┬─────┘  └──────────────────┘  │
+│                                   │                               │
+│                    ┌──────────────┼──────────────┐                │
+│                    │              │              │                │
+│               ┌────┴────┐  ┌─────┴────┐  ┌─────┴─────┐          │
+│               │  Metal  │  │  OpenGL  │  │   WebGL   │          │
+│               │ (macOS) │  │(Linux/Win)│  │  (WASM)  │          │
+│               └─────────┘  └──────────┘  └───────────┘          │
+├──────────────────────────────────────────────────────────────────┤
+│                     Operating System                              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐ │
+│  │  macOS   │  │  Linux   │  │ Windows  │  │     Browser      │ │
+│  │  PTY +   │  │ PTY +    │  │ ConPTY + │  │     N/A          │ │
+│  │  Metal   │  │ OpenGL   │  │ WGL/OGL  │  │                  │ │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────────────┘ │
+└──────────────────────────────────────────────────────────────────┘</div>
+
+<h3>Win32 AppRT Architecture</h3>
+<div class="diagram">
+                    ┌──────────────────────────────┐
+                    │      Win32 App (App.zig)      │
+                    │                              │
+                    │  • Window class registration │
+                    │  • Message loop (GetMessage) │
+                    │  • Config management         │
+                    │  • WM_WAKEUP for core tick   │
+                    └──────┬───────────────────────┘
+                           │ owns 1..N
+                    ┌──────┴───────────────────────┐
+                    │   Win32 Surface (Surface.zig) │
+                    │                              │
+                    │  • HWND (child window)       │
+                    │  • WGL OpenGL context        │
+                    │  • Input handling             │
+                    │  • Clipboard operations       │
+                    │  • DPI management             │
+                    └──────┬───────────────────────┘
+                           │ wraps
+                    ┌──────┴───────────────────────┐
+                    │     CoreSurface (Surface.zig) │
+                    │         (shared core)         │
+                    │                              │
+                    │  • Terminal state             │
+                    │  • Font grid                  │
+                    │  • Renderer (OpenGL)          │
+                    │  • TermIO (ConPTY)            │
+                    └──────────────────────────────┘</div>
+
+<h3>Threading Model</h3>
+<div class="diagram">
+Main Thread (Win32 Message Loop)
+├── GetMessage / DispatchMessage
+├── WM_KEYDOWN → CoreSurface.keyCallback()
+├── WM_CHAR → CoreSurface.charCallback()
+├── WM_MOUSEMOVE → CoreSurface.mouseCallback()
+├── WM_SIZE → CoreSurface.sizeCallback()
+├── WM_WAKEUP → CoreApp.tick()
+└── WM_CLOSE → graceful shutdown
+
+Render Thread (per surface, ~120 FPS)
+├── makeContextCurrent() (WGL)
+├── GenericRenderer.drawFrame()
+│   ├── rebuildCells() from terminal state
+│   ├── Upload GPU buffers
+│   ├── Execute render passes (bg, text, decorations)
+│   └── SwapBuffers()
+└── Sleep 8ms
+
+Read Thread (per surface)
+├── ReadFile() from ConPTY pipe (blocking)
+├── Parse VT sequences (SIMD-optimized)
+├── Update terminal state
+└── Signal renderer for redraw
+
+Write Thread (per surface)
+├── Wait for input from CoreSurface
+└── WriteFile() to ConPTY pipe</div>
+
+<h2 id="decisions">4. Tech Stack Decisions</h2>
+
+<table>
+    <tr><th>Decision</th><th>Choice</th><th>Rationale</th></tr>
+    <tr>
+        <td>Language</td>
+        <td><span class="badge badge-done">Zig</span></td>
+        <td>Consistent with codebase. Zig compiles to native code, calls C APIs directly. The GTK app is also pure Zig calling C APIs.</td>
+    </tr>
+    <tr>
+        <td>Win32 Bindings</td>
+        <td><span class="badge badge-done">zigwin32</span></td>
+        <td>Type-safe Zig bindings for Win32. Already adopted in PR #12403. Recommended by the Zig community. Future-proof as Zig 0.16 removes std.os.windows.</td>
+    </tr>
+    <tr>
+        <td>GPU API</td>
+        <td><span class="badge badge-done">OpenGL 4.3+ via WGL</span></td>
+        <td>Ghostty already has a complete OpenGL renderer. WGL is the standard way to use OpenGL on Windows.
+        All modern GPUs support OpenGL 4.3+. No need for DirectX complexity.</td>
+    </tr>
+    <tr>
+        <td>PTY</td>
+        <td><span class="badge badge-done">ConPTY</span></td>
+        <td>Already fully implemented. Windows 10 1809+ required. ConPTY is the standard modern pseudo-console API.</td>
+    </tr>
+    <tr>
+        <td>Font Rendering</td>
+        <td><span class="badge badge-done">FreeType</span></td>
+        <td>Already implemented with Windows font directory scanner. Cross-platform consistency. DirectWrite could be added later for better ClearType.</td>
+    </tr>
+    <tr>
+        <td>Text Shaping</td>
+        <td><span class="badge badge-done">HarfBuzz</span></td>
+        <td>Already used across all platforms. Handles complex scripts and ligatures.</td>
+    </tr>
+    <tr>
+        <td>Why not C++?</td>
+        <td><span class="badge badge-todo">Rejected</span></td>
+        <td>Would break the single-compilation-unit model. Zig can call all Win32 C APIs directly. C++ adds build complexity with no benefit.</td>
+    </tr>
+    <tr>
+        <td>Why not C#/WPF/WinUI?</td>
+        <td><span class="badge badge-todo">Rejected</span></td>
+        <td>Requires .NET runtime dependency. Can't integrate with Zig build system. Not consistent with Ghostty's "no runtime dependency" philosophy.</td>
+    </tr>
+    <tr>
+        <td>Why not DirectX?</td>
+        <td><span class="badge badge-wip">Deferred</span></td>
+        <td>OpenGL works well for terminal rendering. DirectX 12 would require rewriting the entire renderer. Could be a future optimization if needed.</td>
+    </tr>
+</table>
+
+<h2 id="existing">5. Existing Windows Groundwork</h2>
+
+<table>
+    <tr><th>Component</th><th>Status</th><th>Location</th><th>Notes</th></tr>
+    <tr>
+        <td>ConPTY Integration</td>
+        <td><span class="badge badge-done">Done</span></td>
+        <td><code>src/os/windows.zig</code></td>
+        <td>Full Win32 API bindings for CreatePseudoConsole, ResizePseudoConsole, etc.</td>
+    </tr>
+    <tr>
+        <td>Windows PTY</td>
+        <td><span class="badge badge-done">Done</span></td>
+        <td><code>src/pty.zig</code></td>
+        <td>WindowsPty with named pipes, open/deinit/getSize/setSize. getProcessInfo() returns null (TODO).</td>
+    </tr>
+    <tr>
+        <td>Process Spawning</td>
+        <td><span class="badge badge-done">Done</span></td>
+        <td><code>src/Command.zig</code></td>
+        <td>startWindows() with CreateProcessW, environment block, ConPTY attribute.</td>
+    </tr>
+    <tr>
+        <td>I/O Read Thread</td>
+        <td><span class="badge badge-done">Done</span></td>
+        <td><code>src/termio/Exec.zig</code></td>
+        <td>threadMainWindows() with ReadFile + PeekNamedPipe. Shell command resolves %COMSPEC%.</td>
+    </tr>
+    <tr>
+        <td>Font Discovery</td>
+        <td><span class="badge badge-done">Done</span></td>
+        <td><code>src/font/discovery.zig</code></td>
+        <td>Scans C:\Windows\Fonts and %LOCALAPPDATA%\Microsoft\Windows\Fonts.</td>
+    </tr>
+    <tr>
+        <td>Build System</td>
+        <td><span class="badge badge-done">Done</span></td>
+        <td><code>build.zig</code>, <code>src/build/</code></td>
+        <td>MSVC ABI, .exe subsystem, resource file, DPI manifest.</td>
+    </tr>
+    <tr>
+        <td>Win32 AppRT Skeleton</td>
+        <td><span class="badge badge-wip">PR #12403</span></td>
+        <td><code>src/apprt/win32/</code></td>
+        <td>Basic window + WGL + CoreSurface. Opens window, runs cmd.exe, renders output.</td>
+    </tr>
+    <tr>
+        <td>Keyboard Input</td>
+        <td><span class="badge badge-todo">Todo</span></td>
+        <td>—</td>
+        <td>WM_KEYDOWN, WM_CHAR, WM_SYSKEYDOWN → CoreSurface.keyCallback()</td>
+    </tr>
+    <tr>
+        <td>Mouse Input</td>
+        <td><span class="badge badge-todo">Todo</span></td>
+        <td>—</td>
+        <td>WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_MOUSEWHEEL → CoreSurface.mouseCallback()</td>
+    </tr>
+    <tr>
+        <td>Clipboard</td>
+        <td><span class="badge badge-todo">Todo</span></td>
+        <td>—</td>
+        <td>OpenClipboard, Get/SetClipboardData, CF_UNICODETEXT</td>
+    </tr>
+    <tr>
+        <td>DPI Awareness</td>
+        <td><span class="badge badge-todo">Todo</span></td>
+        <td>—</td>
+        <td>GetDpiForWindow, WM_DPICHANGED, content scale calculation</td>
+    </tr>
+    <tr>
+        <td>Tabs/Splits</td>
+        <td><span class="badge badge-todo">Todo</span></td>
+        <td>—</td>
+        <td>Custom tab bar, split pane management</td>
+    </tr>
+</table>
+
+<h2 id="implementation">6. Implementation Plan (5 Tiers)</h2>
+
+<h3>Tier 1: Foundation — Basic Working Terminal <span class="badge badge-wip">In Progress (PR #12403)</span></h3>
+<div class="card">
+    <p>Get a window that opens, creates a ConPTY, runs a shell, and displays output with GPU rendering.</p>
+    <ul>
+        <li>Win32 window creation (RegisterClassExW, CreateWindowExW)</li>
+        <li>Win32 message loop (GetMessage, TranslateMessage, DispatchMessage)</li>
+        <li>WGL OpenGL context (ChoosePixelFormat, wglCreateContext)</li>
+        <li>CoreSurface initialization and wiring</li>
+        <li>SwapBuffers after drawFrame</li>
+        <li>WM_SIZE → sizeCallback for terminal resize</li>
+    </ul>
+    <p><strong>Result:</strong> Terminal window opens, cmd.exe runs, output is visible, window resizes work.</p>
+</div>
+
+<h3>Tier 2: Input — Keyboard, Mouse, Clipboard <span class="badge badge-todo">Todo</span></h3>
+<div class="card">
+    <h3>Keyboard Input</h3>
+    <pre><code>WM_KEYDOWN / WM_KEYUP → translate VK code → CoreSurface.keyCallback()
+WM_CHAR / WM_UNICHAR   → character input    → CoreSurface.charCallback()
+WM_SYSKEYDOWN          → Alt combinations   → handle or pass to DefWindowProc</code></pre>
+
+    <p>Key translation mapping needed:</p>
+    <table>
+        <tr><th>Win32 VK</th><th>Ghostty Key</th><th>Notes</th></tr>
+        <tr><td>VK_RETURN</td><td>.enter</td><td>Check for numpad enter</td></tr>
+        <tr><td>VK_BACK</td><td>.backspace</td><td></td></tr>
+        <tr><td>VK_TAB</td><td>.tab</td><td></td></tr>
+        <tr><td>VK_ESCAPE</td><td>.escape</td><td></td></tr>
+        <tr><td>VK_LEFT/RIGHT/UP/DOWN</td><td>.left/.right/.up/.down</td><td></td></tr>
+        <tr><td>VK_F1-F24</td><td>.f1-.f24</td><td></td></tr>
+        <tr><td>VK_CONTROL</td><td>.left_control/.right_control</td><td>Distinguish via scancode</td></tr>
+        <tr><td>VK_SHIFT</td><td>.left_shift/.right_shift</td><td>Use MapVirtualKey for side</td></tr>
+        <tr><td>VK_MENU</td><td>.left_alt/.right_alt</td><td>Right Alt = AltGr on intl keyboards</td></tr>
+    </table>
+
+    <div class="warn">
+        <strong>Warning — AltGr handling:</strong> On international keyboards, AltGr sends
+        Ctrl+Alt. Must detect this to avoid intercepting character input meant for AltGr combos
+        (e.g., AltGr+Q = @ on German keyboards).
+    </div>
+
+    <h3>Mouse Input</h3>
+    <pre><code>WM_MOUSEMOVE     → CoreSurface.cursorPosCallback(x, y)
+WM_LBUTTONDOWN   → CoreSurface.mouseButtonCallback(.left, .press)
+WM_LBUTTONUP     → CoreSurface.mouseButtonCallback(.left, .release)
+WM_RBUTTONDOWN   → CoreSurface.mouseButtonCallback(.right, .press)
+WM_MOUSEWHEEL    → CoreSurface.scrollCallback(0, delta)
+WM_MOUSEHWHEEL   → CoreSurface.scrollCallback(delta, 0)</code></pre>
+
+    <h3>Clipboard</h3>
+    <pre><code>Read:  OpenClipboard → GetClipboardData(CF_UNICODETEXT) → WideCharToMultiByte → callback
+Write: OpenClipboard → EmptyClipboard → GlobalAlloc → SetClipboardData(CF_UNICODETEXT)</code></pre>
+
+    <h3>IME (Input Method Editor)</h3>
+    <pre><code>WM_IME_STARTCOMPOSITION → show composition window near cursor
+WM_IME_COMPOSITION     → ImmGetCompositionStringW → preedit display
+WM_IME_ENDCOMPOSITION  → commit text</code></pre>
+</div>
+
+<h3>Tier 3: Window Management — DPI, Focus, Title <span class="badge badge-todo">Todo</span></h3>
+<div class="card">
+    <h3>DPI Awareness (PerMonitorV2)</h3>
+    <p>The manifest already declares PerMonitorV2 DPI awareness. Implementation needed:</p>
+    <pre><code>WM_DPICHANGED → {
+    new_dpi = HIWORD(wParam);
+    scale = new_dpi / 96.0;
+    // Resize window to suggested rect
+    SetWindowPos(hwnd, NULL, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, ...);
+    // Update content scale
+    CoreSurface.contentScaleCallback(scale, scale);
+    // Rebuild font atlas at new scale
+}</code></pre>
+
+    <div class="note">
+        <strong>Multi-monitor:</strong> When dragging between monitors with different DPIs,
+        WM_DPICHANGED fires. Must handle gracefully without flickering.
+    </div>
+
+    <h3>Focus Events</h3>
+    <pre><code>WM_SETFOCUS   → CoreSurface.focusCallback(true)
+WM_KILLFOCUS  → CoreSurface.focusCallback(false)</code></pre>
+
+    <h3>Window Title</h3>
+    <pre><code>// Terminal sequences (OSC 0, OSC 2) set the title via core
+// Core calls apprt Surface.setTitle(title)
+Surface.setTitle = fn(title) {
+    SetWindowTextW(hwnd, utf8ToWide(title));
+};</code></pre>
+
+    <h3>Close Handling</h3>
+    <pre><code>WM_CLOSE → {
+    if (has_running_processes) {
+        // Show confirmation dialog
+        result = MessageBoxW(hwnd, "Close terminal?", "Ghostty", MB_YESNO);
+        if (result == IDYES) PostQuitMessage(0);
+    } else {
+        PostQuitMessage(0);
+    }
+}</code></pre>
+</div>
+
+<h3>Tier 4: Advanced Features — Tabs, Splits, Menus <span class="badge badge-todo">Todo</span></h3>
+<div class="card">
+    <h3>Tab Bar</h3>
+    <p>Options considered:</p>
+    <table>
+        <tr><th>Approach</th><th>Pros</th><th>Cons</th></tr>
+        <tr>
+            <td>Custom drawn tab bar</td>
+            <td>Full control, consistent look, theme support</td>
+            <td>More code to write, accessibility needs manual work</td>
+        </tr>
+        <tr>
+            <td>Win32 Tab Control (TCM_*)</td>
+            <td>Native, accessible, familiar</td>
+            <td>Ugly default style, limited customization</td>
+        </tr>
+        <tr>
+            <td>Custom HWND-based tabs</td>
+            <td>Good control, proper focus handling</td>
+            <td>Must handle all drawing</td>
+        </tr>
+    </table>
+    <div class="decision">
+        <strong>Decision:</strong> Custom drawn tab bar in the OpenGL surface, similar to how other modern
+        Windows terminals handle it. This gives us full theming support and avoids the dated look of
+        native tab controls.
+    </div>
+
+    <h3>Splits</h3>
+    <p>Each split creates a new CoreSurface backed by its own ConPTY. The Win32 surface manages
+    child surfaces and handles resize distribution. Splitter bars are custom-drawn with drag handling.</p>
+
+    <h3>Context Menu</h3>
+    <pre><code>WM_RBUTTONUP → {
+    menu = CreatePopupMenu();
+    AppendMenuW(menu, MF_STRING, ID_COPY, L"Copy");
+    AppendMenuW(menu, MF_STRING, ID_PASTE, L"Paste");
+    AppendMenuW(menu, MF_SEPARATOR, 0, null);
+    AppendMenuW(menu, MF_STRING, ID_SETTINGS, L"Settings");
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, null);
+}</code></pre>
+
+    <h3>Multiple Windows</h3>
+    <p>Each window is an independent HWND with its own message processing.
+    The App struct manages a list of windows. <code>WM_WAKEUP</code> is sent to all windows
+    that need core tick processing.</p>
+</div>
+
+<h3>Tier 5: Polish — Shell Integration, Config, Installer <span class="badge badge-todo">Todo</span></h3>
+<div class="card">
+    <h3>Shell Integration</h3>
+    <ul>
+        <li><strong>PowerShell:</strong> Profile script at <code>$PROFILE</code> that sets up prompt hooks
+        for current directory tracking, command status reporting</li>
+        <li><strong>cmd.exe:</strong> AutoRun registry or doskey macros for basic integration</li>
+        <li><strong>WSL:</strong> ConPTY works with WSL — launch <code>wsl.exe</code> as the shell</li>
+        <li><strong>Git Bash:</strong> Launch <code>bash.exe</code> from Git for Windows installation</li>
+    </ul>
+
+    <h3>Config Path</h3>
+    <pre><code>Windows config location: %APPDATA%\ghostty\config
+Fallback to XDG if set:   %XDG_CONFIG_HOME%\ghostty\config
+
+// Already partially handled in src/os/xdg.zig with Windows test cases</code></pre>
+
+    <h3>Crash Reporting</h3>
+    <ul>
+        <li>MiniDumpWriteDump for crash dumps</li>
+        <li>Or Sentry native SDK (currently skipped on Windows)</li>
+        <li>Structured exception handling (SEH) integration</li>
+    </ul>
+
+    <h3>Installer</h3>
+    <ul>
+        <li><strong>MSIX:</strong> Modern Windows packaging, auto-updates via Store</li>
+        <li><strong>MSI:</strong> Traditional installer, more control</li>
+        <li><strong>Portable:</strong> Single .exe + .dll (no install needed)</li>
+        <li><strong>winget/scoop/chocolatey:</strong> Package manager manifests</li>
+    </ul>
+</div>
+
+<h2 id="gpu">7. GPU Rendering on Windows</h2>
+
+<h3>OpenGL via WGL — How It Works</h3>
+<div class="card">
+    <p>Ghostty's OpenGL renderer is already fully functional. On Windows, we just need to provide
+    an OpenGL context via WGL (Windows OpenGL). The rendering code itself is 100% shared.</p>
+
+    <h3>WGL Context Creation (from PR #12403)</h3>
+    <pre><code>1. GetDC(hwnd)                          // Get device context
+2. ChoosePixelFormat(hdc, &pfd)          // Select pixel format (RGBA, 32-bit, double-buffered)
+3. SetPixelFormat(hdc, format, &pfd)     // Apply pixel format
+4. wglCreateContext(hdc)                 // Create OpenGL context
+5. wglMakeCurrent(hdc, hglrc)            // Make context current on this thread</code></pre>
+
+    <h3>Thread Handoff (Critical!)</h3>
+    <pre><code>Main thread:
+  1. Creates WGL context
+  2. Calls wglMakeCurrent(null, null)     // Release from main thread
+  
+Render thread:
+  1. Calls surface.makeContextCurrent()   // Acquire on render thread
+  2. Loads GL functions via GLAD
+  3. Runs render loop at ~120 FPS
+  4. Calls SwapBuffers(hdc) after each frame</code></pre>
+
+    <div class="note">
+        <strong>Note:</strong> OpenGL contexts can only be current on one thread at a time.
+        The main thread must release the context before the render thread can acquire it.
+        This is already handled in PR #12403's Surface.zig.
+    </div>
+
+    <h3>GLAD Function Loading on Windows</h3>
+    <p>GLAD loads OpenGL functions via two mechanisms on Windows:</p>
+    <ul>
+        <li><code>wglGetProcAddress()</code> — For OpenGL 1.2+ extension functions</li>
+        <li><code>GetProcAddress(opengl32.dll)</code> — For OpenGL 1.0/1.1 core functions</li>
+    </ul>
+    <p>This is already handled by the existing GLAD loader when passed <code>null</code> as the loader function.</p>
+
+    <h3>VSync</h3>
+    <pre><code>// wglSwapIntervalEXT(1) for VSync, (0) for unlimited FPS
+// Load via wglGetProcAddress("wglSwapIntervalEXT")
+// Ghostty's render thread already targets ~120 FPS with its own timer</code></pre>
+</div>
+
+<h2 id="edge-cases">8. Windows Edge Cases & Pitfalls</h2>
+
+<div class="card">
+    <h3>Path Handling</h3>
+    <table>
+        <tr><th>Issue</th><th>Solution</th></tr>
+        <tr>
+            <td>MAX_PATH (260 char) limitation</td>
+            <td>Manifest declares <code>longPathAware</code>. Use <code>\\?\</code> prefix for long paths.
+            Registry key: <code>HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled</code></td>
+        </tr>
+        <tr>
+            <td>Backslash vs forward slash</td>
+            <td>Win32 APIs accept forward slashes. Normalize in display only. Zig's std.fs handles both.</td>
+        </tr>
+        <tr>
+            <td>Drive letters (C:\)</td>
+            <td>Path operations must handle drive letter prefix. Don't strip it.</td>
+        </tr>
+        <tr>
+            <td>UNC paths (\\server\share)</td>
+            <td>Support in path resolution. ConPTY working directory can be UNC.</td>
+        </tr>
+        <tr>
+            <td>Reserved filenames (CON, PRN, NUL)</td>
+            <td>Don't create files with these names. Check in config path validation.</td>
+        </tr>
+    </table>
+
+    <h3>UTF-8 vs UTF-16</h3>
+    <table>
+        <tr><th>Issue</th><th>Solution</th></tr>
+        <tr>
+            <td>Win32 APIs use UTF-16 (WCHAR)</td>
+            <td>All Ghostty strings are UTF-8. Convert at the Win32 API boundary using
+            <code>std.unicode.utf8ToUtf16LeStringLiteral()</code> or <code>MultiByteToWideChar</code>.</td>
+        </tr>
+        <tr>
+            <td>Clipboard data is UTF-16</td>
+            <td>Convert CF_UNICODETEXT to/from UTF-8 when reading/writing clipboard.</td>
+        </tr>
+        <tr>
+            <td>ConPTY output encoding</td>
+            <td>ConPTY outputs UTF-8 by default (Windows 10 1903+). No conversion needed for terminal data.</td>
+        </tr>
+        <tr>
+            <td>File paths in config</td>
+            <td>Config files are UTF-8. Convert paths to UTF-16 only when calling Win32 file APIs.</td>
+        </tr>
+    </table>
+
+    <h3>ConPTY Quirks</h3>
+    <table>
+        <tr><th>Issue</th><th>Solution</th></tr>
+        <tr>
+            <td>ConPTY adds extra newlines</td>
+            <td>Known issue in older Windows versions. Windows 11 23H2+ is much better. May need workarounds for older versions.</td>
+        </tr>
+        <tr>
+            <td>No SIGWINCH equivalent</td>
+            <td>Use ResizePseudoConsole() directly. Already implemented in WindowsPty.setSize().</td>
+        </tr>
+        <tr>
+            <td>Process exit detection</td>
+            <td>ReadFile returns 0 bytes / ERROR_BROKEN_PIPE when process exits. Already handled in threadMainWindows().</td>
+        </tr>
+        <tr>
+            <td>Ctrl+C handling</td>
+            <td>ConPTY handles Ctrl+C → CTRL_C_EVENT automatically. Don't intercept WM_KEYDOWN for Ctrl+C
+            when terminal is in raw mode.</td>
+        </tr>
+        <tr>
+            <td>Adjacent conpty.dll</td>
+            <td>Can bundle conpty.dll for older Windows versions. Load via LoadLibrary with adjacent path.</td>
+        </tr>
+    </table>
+
+    <h3>DPI and Display</h3>
+    <table>
+        <tr><th>Issue</th><th>Solution</th></tr>
+        <tr>
+            <td>Multiple monitors, different DPI</td>
+            <td>PerMonitorV2 manifest. Handle WM_DPICHANGED. Rebuild font atlas on DPI change.</td>
+        </tr>
+        <tr>
+            <td>Fractional scaling (125%, 150%)</td>
+            <td>Content scale = DPI / 96.0. Font size * scale. Pixel-perfect grid alignment.</td>
+        </tr>
+        <tr>
+            <td>Remote Desktop DPI</td>
+            <td>RDP can change DPI mid-session. Handle WM_DPICHANGED even in RDP scenarios.</td>
+        </tr>
+    </table>
+
+    <h3>Other Windows-Specific Issues</h3>
+    <table>
+        <tr><th>Issue</th><th>Solution</th></tr>
+        <tr>
+            <td>Windows Defender false positives</td>
+            <td>Code-sign the executable. Submit to Microsoft for whitelisting.</td>
+        </tr>
+        <tr>
+            <td>Antivirus scanning delays</td>
+            <td>Use MOVEFILE_DELAY_UNTIL_REBOOT for locked files. Handle ERROR_SHARING_VIOLATION.</td>
+        </tr>
+        <tr>
+            <td>UAC elevation</td>
+            <td>Never require elevation. Detect elevated parent and warn.</td>
+        </tr>
+        <tr>
+            <td>Windows Terminal integration</td>
+            <td>Ghostty can be added as a Windows Terminal profile (JSON settings fragment).</td>
+        </tr>
+        <tr>
+            <td>Dark/Light mode</td>
+            <td>Read <code>AppsUseLightTheme</code> from registry. Listen for WM_SETTINGCHANGE.</td>
+        </tr>
+        <tr>
+            <td>Line endings (\r\n vs \n)</td>
+            <td>Config files: accept both. Terminal output: ConPTY handles translation.</td>
+        </tr>
+    </table>
+</div>
+
+<h2 id="testing">9. Test Strategy</h2>
+
+<div class="card">
+    <h3>Unit Tests (Zig test framework)</h3>
+    <pre><code>zig build test -Dtest-filter=&lt;filter&gt;</code></pre>
+    <ul>
+        <li>Path handling: backslashes, drive letters, UNC, long paths, reserved names</li>
+        <li>UTF-8 ↔ UTF-16 conversion at Win32 API boundaries</li>
+        <li>Keyboard VK → Ghostty key translation</li>
+        <li>DPI calculations and content scale</li>
+        <li>Clipboard data round-trip</li>
+        <li>Config file loading from %APPDATA%</li>
+        <li>ConPTY creation and resize</li>
+        <li>Window class registration</li>
+    </ul>
+
+    <h3>Integration Tests</h3>
+    <ul>
+        <li>Terminal output rendering correctness (vttest)</li>
+        <li>Keyboard input → terminal echo round-trip</li>
+        <li>Multi-monitor DPI switching</li>
+        <li>Window resize → terminal grid recalculation</li>
+        <li>Copy/paste with Unicode content</li>
+        <li>IME composition (CJK input)</li>
+    </ul>
+
+    <h3>Stress Tests</h3>
+    <ul>
+        <li>Large output throughput (cat large file)</li>
+        <li>Rapid resize events</li>
+        <li>Many concurrent terminals</li>
+        <li>Memory leak detection (no Valgrind on Windows — use UMDH or custom allocator tracking)</li>
+    </ul>
+</div>
+
+<h2 id="timeline">10. Development Roadmap</h2>
+
+<div class="card">
+    <table>
+        <tr><th>Phase</th><th>Milestone</th><th>Status</th></tr>
+        <tr>
+            <td>0</td>
+            <td>Research & design document</td>
+            <td><span class="badge badge-done">Done</span></td>
+        </tr>
+        <tr>
+            <td>1</td>
+            <td>Build core on Windows (zig build compiles)</td>
+            <td><span class="badge badge-wip">In Progress</span></td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>Win32 apprt skeleton (window + WGL + ConPTY)</td>
+            <td><span class="badge badge-wip">PR #12403</span></td>
+        </tr>
+        <tr>
+            <td>3</td>
+            <td>Keyboard & mouse input</td>
+            <td><span class="badge badge-todo">Todo</span></td>
+        </tr>
+        <tr>
+            <td>4</td>
+            <td>Clipboard, DPI, focus, title</td>
+            <td><span class="badge badge-todo">Todo</span></td>
+        </tr>
+        <tr>
+            <td>5</td>
+            <td>Tabs, splits, context menu</td>
+            <td><span class="badge badge-todo">Todo</span></td>
+        </tr>
+        <tr>
+            <td>6</td>
+            <td>Shell integration, config, installer</td>
+            <td><span class="badge badge-todo">Todo</span></td>
+        </tr>
+        <tr>
+            <td>7</td>
+            <td>Polish, performance tuning, testing</td>
+            <td><span class="badge badge-todo">Todo</span></td>
+        </tr>
+    </table>
+</div>
+
+<hr>
+<p style="color: var(--text-muted); text-align: center;">
+    Ghostty Windows Port Design Document v1.0 — Built with 👻 energy
+</p>
+
+</body>
+</html>

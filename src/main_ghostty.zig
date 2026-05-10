@@ -58,6 +58,23 @@ pub fn main(minimal: std.process.Init.Minimal) !MainReturn {
     defer global.deinit();
     const alloc = global.alloc();
 
+    // On Windows, disable stderr logging by default (no console spam).
+    // Users can enable it with GHOSTTY_LOG=stderr:true environment variable.
+    if (comptime builtin.os.tag == .windows) {
+        if (state.action == null) {
+            // Only disable if GHOSTTY_LOG wasn't explicitly set
+            const has_log_env = std.process.getEnvVarOwned(
+                std.heap.page_allocator,
+                "GHOSTTY_LOG",
+            ) catch null;
+            if (has_log_env) |v| {
+                std.heap.page_allocator.free(v);
+            } else {
+                state.logging.stderr = false;
+            }
+        }
+    }
+
     if (comptime builtin.mode == .Debug) {
         std.log.warn("This is a debug build. Performance will be very poor.", .{});
         std.log.warn("You should only use a debug build for developing Ghostty.", .{});
@@ -114,6 +131,60 @@ pub fn main(minimal: std.process.Init.Minimal) !MainReturn {
     try app_runtime.run();
 }
 
+/// Returns the Windows log file handle, opening/creating it lazily on first call.
+fn win32LogFile() ?std.fs.File {
+    if (comptime builtin.os.tag != .windows) return null;
+    return Win32Log.getFile();
+}
+
+fn win32LogMutex() *std.Thread.Mutex {
+    return &Win32Log.write_mutex;
+}
+
+const Win32Log = struct {
+    var file: ?std.fs.File = null;
+    var initialized: bool = false;
+    var init_mutex: std.Thread.Mutex = .{};
+    var write_mutex: std.Thread.Mutex = .{};
+
+    fn getFile() ?std.fs.File {
+        // Fast path: already initialized
+        if (initialized) return file;
+
+        init_mutex.lock();
+        defer init_mutex.unlock();
+
+        // Double-check after acquiring lock
+        if (initialized) return file;
+        initialized = true;
+
+        const local_appdata = std.process.getEnvVarOwned(
+            std.heap.page_allocator,
+            "LOCALAPPDATA",
+        ) catch return null;
+        defer std.heap.page_allocator.free(local_appdata);
+
+        const log_dir = std.fmt.allocPrint(
+            std.heap.page_allocator,
+            "{s}\\ghostty",
+            .{local_appdata},
+        ) catch return null;
+        defer std.heap.page_allocator.free(log_dir);
+
+        std.fs.cwd().makePath(log_dir) catch {};
+
+        const log_path = std.fmt.allocPrint(
+            std.heap.page_allocator,
+            "{s}\\ghostty.log",
+            .{log_dir},
+        ) catch return null;
+        defer std.heap.page_allocator.free(log_path);
+
+        file = std.fs.cwd().createFile(log_path, .{}) catch null;
+        return file;
+    }
+};
+
 // The function std.log will call.
 fn logFn(
     comptime level: std.log.Level,
@@ -146,6 +217,26 @@ fn logFn(
             prefix ++ format,
             args,
         );
+    }
+
+    // On Windows, log to a file in %LOCALAPPDATA%\ghostty\ghostty.log
+    win32_log: {
+        if (comptime builtin.os.tag != .windows) break :win32_log;
+        if (comptime builtin.mode != .Debug and level == .debug) break :win32_log;
+
+        const log_file = win32LogFile() orelse break :win32_log;
+
+        // Lock the write mutex so log lines from different threads don't interleave
+        win32LogMutex().lock();
+        defer win32LogMutex().unlock();
+
+        const level_txt = comptime level.asText();
+        const prefix = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
+        var buf: [256]u8 = undefined;
+        var file_writer = log_file.writer(&buf);
+        const writer = &file_writer.interface;
+        nosuspend writer.print(level_txt ++ prefix ++ format ++ "\n", args) catch break :win32_log;
+        nosuspend writer.flush() catch break :win32_log;
     }
 
     stderr: {
