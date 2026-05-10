@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ghostty Win32 — Architecture Reference</title>
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#c9d1d9;--muted:#8b949e;--accent:#58a6ff;--green:#7ee787;--yellow:#d29922;--red:#f85149;--code:#1c2128}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;padding:2rem;max-width:1100px;margin:0 auto}
+h1{color:var(--accent);font-size:2rem;margin-bottom:.5rem;border-bottom:2px solid var(--border);padding-bottom:.5rem}
+h2{color:var(--green);font-size:1.4rem;margin:2rem 0 1rem;border-bottom:1px solid var(--border);padding-bottom:.3rem}
+h3{color:var(--accent);font-size:1.15rem;margin:1.5rem 0 .5rem}
+h4{color:var(--yellow);font-size:1rem;margin:1rem 0 .4rem}
+p{margin-bottom:1rem}
+a{color:var(--accent)}
+code{background:var(--code);padding:.2em .4em;border-radius:4px;font-size:.9em;color:var(--accent)}
+pre{background:var(--code);padding:1rem;border-radius:8px;overflow-x:auto;margin-bottom:1rem;border:1px solid var(--border)}
+pre code{background:none;padding:0}
+table{width:100%;border-collapse:collapse;margin-bottom:1.5rem}
+th,td{padding:.6rem;text-align:left;border:1px solid var(--border)}
+th{background:var(--surface);color:var(--accent)}
+tr:nth-child(even){background:var(--surface)}
+ul,ol{margin-left:1.5rem;margin-bottom:1rem}
+li{margin-bottom:.3rem}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.5rem;margin-bottom:1.5rem}
+.nav{margin-bottom:1rem;font-size:.9em}
+.nav a{margin-right:1rem}
+.stat{display:inline-block;background:var(--surface);border:1px solid var(--border);padding:.3em .8em;border-radius:6px;margin-right:.5em;font-size:.85em}
+</style>
+</head>
+<body>
+<div class="nav"><a href="index.html">← Index</a> <a href="api-reference.html">API Reference →</a></div>
+
+<h1>Architecture Reference</h1>
+<p>Module-by-module breakdown of the Ghostty Win32 application runtime.</p>
+
+<p>
+<span class="stat">Total: <strong>3,267 lines</strong> of Zig</span>
+<span class="stat">Source: <strong>2,889 lines</strong></span>
+<span class="stat">Tests: <strong>378 lines</strong></span>
+<span class="stat">API decls: <strong>446 lines</strong></span>
+</p>
+
+<h2>System Overview</h2>
+<div class="card">
+<pre><code>┌──────────────────────────────────────────────────────┐
+│                    Win32 Window                       │
+│  ┌──────────────────────────────────────────────────┐ │
+│  │  Menu Bar  (Ghostty│File│Edit│View│Window│Help)  │ │
+│  ├──────────────────────────────────────────────────┤ │
+│  │  Tab Bar  [Tab 1] [Tab 2] [Tab 3]               │ │
+│  ├──────────────────┬───────────────────────────────┤ │
+│  │                  │                               │ │
+│  │   Surface (GL)   │   Surface (GL)                │ │
+│  │   WGL context    │   WGL context                 │ │
+│  │   ConPTY         │   ConPTY                      │ │
+│  │                  │                               │ │
+│  ├──────────────────┴───────────────────────────────┤ │
+│  │  Search Bar  [_______________] [3/42]            │ │
+│  └──────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────┘</code></pre>
+</div>
+
+<h2>1. App.zig — Application Core (1,662 lines)</h2>
+
+<h3>Purpose</h3>
+<p>The main application module. Owns the top-level Win32 window, manages the
+event loop, tab collection, menu bar, search overlay, and dispatches actions
+from the core library to the appropriate UI elements.</p>
+
+<h3>Struct Fields</h3>
+<table>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>core_app</code></td><td><code>*CoreApp</code></td><td>The cross-platform core application</td></tr>
+<tr><td><code>config</code></td><td><code>*Config</code></td><td>Loaded configuration (fonts, theme, etc.)</td></tr>
+<tr><td><code>alloc</code></td><td><code>Allocator</code></td><td>General-purpose allocator</td></tr>
+<tr><td><code>running</code></td><td><code>bool</code></td><td>Event loop control flag</td></tr>
+<tr><td><code>hwnd</code></td><td><code>?HWND</code></td><td>Main window handle</td></tr>
+<tr><td><code>tabs</code></td><td><code>ArrayList(Tab)</code></td><td>All tabs in the window</td></tr>
+<tr><td><code>active_tab</code></td><td><code>usize</code></td><td>Index of the currently visible tab</td></tr>
+<tr><td><code>surfaces</code></td><td><code>ArrayList(*Surface)</code></td><td>All surfaces for cleanup/routing</td></tr>
+<tr><td><code>search_hwnd</code></td><td><code>?HWND</code></td><td>EDIT control for search input</td></tr>
+<tr><td><code>search_count_hwnd</code></td><td><code>?HWND</code></td><td>STATIC label showing "X/Y" match count</td></tr>
+<tr><td><code>search_active</code></td><td><code>bool</code></td><td>Whether search overlay is visible</td></tr>
+<tr><td><code>search_total</code></td><td><code>?usize</code></td><td>Total search matches from core</td></tr>
+<tr><td><code>search_selected</code></td><td><code>?usize</code></td><td>Currently selected match index (0-based)</td></tr>
+<tr><td><code>menu_bar</code></td><td><code>?HMENU</code></td><td>Menu bar handle</td></tr>
+<tr><td><code>is_fullscreen</code></td><td><code>bool</code></td><td>Fullscreen state</td></tr>
+<tr><td><code>is_float_on_top</code></td><td><code>bool</code></td><td>Always-on-top state</td></tr>
+<tr><td><code>pre_fullscreen_style</code></td><td><code>DWORD</code></td><td>Saved window style before fullscreen</td></tr>
+<tr><td><code>pre_fullscreen_rect</code></td><td><code>RECT</code></td><td>Saved window position before fullscreen</td></tr>
+</table>
+
+<h3>Key Functions</h3>
+
+<h4>Lifecycle</h4>
+<table>
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>init()</code></td><td>Creates window, registers surface class, creates search bar, menu bar, first tab</td></tr>
+<tr><td><code>run()</code></td><td>Main event loop — <code>GetMessageW</code> + search key interception + <code>TranslateMessage</code>/<code>DispatchMessageW</code></td></tr>
+<tr><td><code>terminate()</code></td><td>Destroys window, surfaces, tabs, fonts, config</td></tr>
+<tr><td><code>wakeup()</code></td><td>Posts <code>WM_WAKEUP</code> to trigger core app tick from any thread</td></tr>
+</table>
+
+<h4>Actions</h4>
+<table>
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>performAction()</code></td><td>Handles 20+ action types: quit, new_tab, close_tab, goto_tab, goto_split, new_split, toggle_fullscreen, close_window, close_all_windows, equalize_splits, float_window, open_config, reload_config, start_search, end_search, set_title, search_total, search_selected</td></tr>
+</table>
+
+<h4>Tab Management</h4>
+<table>
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>createNewTab()</code></td><td>Creates a new surface + tab, appends to tab list, focuses it</td></tr>
+<tr><td><code>closeTab(mode)</code></td><td>Closes current tab (<code>.this</code>), other tabs (<code>.other</code>), or tabs to the right (<code>.right</code>)</td></tr>
+<tr><td><code>closeTabAt(idx)</code></td><td>Closes a specific tab by index, posts <code>WM_QUIT</code> if last tab</td></tr>
+<tr><td><code>gotoTab(target)</code></td><td>Switches to a tab by index, previous, next, or last</td></tr>
+</table>
+
+<h4>Split Management</h4>
+<table>
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>createNewSplit(dir)</code></td><td>Splits the focused surface in the given direction (right/left/down/up)</td></tr>
+<tr><td><code>gotoSplit(dir)</code></td><td>Navigates to previous/next split by collecting leaves in tree order</td></tr>
+<tr><td><code>collectLeaves()</code></td><td>Recursively collects all leaf surfaces into an array for navigation</td></tr>
+</table>
+
+<h4>Search</h4>
+<table>
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>showSearch(needle)</code></td><td>Shows search bar, sets text, resets counts, focuses EDIT</td></tr>
+<tr><td><code>hideSearch()</code></td><td>Hides search bar and count label, returns focus to surface</td></tr>
+<tr><td><code>createSearchBar()</code></td><td>Creates EDIT control + STATIC count label (both initially hidden)</td></tr>
+<tr><td><code>handleSearchInput()</code></td><td>Reads UTF-16 from EDIT, converts to UTF-8, sends to core via <code>performBindingAction</code></td></tr>
+<tr><td><code>updateSearchCount()</code></td><td>Formats "X/Y" from <code>search_selected</code>/<code>search_total</code> and updates the STATIC label</td></tr>
+</table>
+
+<h4>Window Features</h4>
+<table>
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>toggleFullscreen()</code></td><td>Saves/restores window style + position, uses <code>MonitorFromWindow</code>/<code>GetMonitorInfoW</code> for monitor bounds</td></tr>
+<tr><td><code>toggleFloat()</code></td><td>Toggles <code>HWND_TOPMOST</code>/<code>HWND_NOTOPMOST</code> via <code>SetWindowPos</code></td></tr>
+<tr><td><code>openConfig()</code></td><td>Launches <code>config.ghostty</code> in default editor via <code>ShellExecuteW</code></td></tr>
+<tr><td><code>reloadConfig()</code></td><td>Reloads config from disk, replaces the current config pointer</td></tr>
+<tr><td><code>showAbout()</code></td><td>Shows an About dialog via <code>MessageBoxW</code></td></tr>
+</table>
+
+<h4>Menu Bar</h4>
+<table>
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>createMenuBar()</code></td><td>Creates 6 popup menus (Ghostty, File, Edit, View, Window, Help) with 30+ items</td></tr>
+<tr><td><code>handleMenuCommand(cmd)</code></td><td>Routes menu command IDs to the appropriate action</td></tr>
+<tr><td><code>showContextMenu(x, y)</code></td><td>Creates and shows a right-click popup menu at screen coordinates</td></tr>
+</table>
+
+<h4>Window Procedure</h4>
+<table>
+<tr><th>Message</th><th>Handler</th></tr>
+<tr><td><code>WM_CLOSE</code></td><td>Posts <code>WM_QUIT</code></td></tr>
+<tr><td><code>WM_ACTIVATE</code></td><td>Refocuses active surface or search bar on window reactivation</td></tr>
+<tr><td><code>WM_SIZE</code></td><td>Triggers <code>updateLayout()</code></td></tr>
+<tr><td><code>WM_PAINT</code></td><td>Draws the custom tab bar via GDI</td></tr>
+<tr><td><code>WM_COMMAND</code></td><td>Routes menu commands and search EDIT notifications</td></tr>
+<tr><td><code>WM_CONTEXTMENU</code></td><td>Shows right-click popup</td></tr>
+<tr><td><code>WM_LBUTTONDOWN</code></td><td>Handles tab bar clicks and surface refocusing</td></tr>
+<tr><td><code>WM_KEYDOWN</code></td><td>Search Escape/Enter handling</td></tr>
+<tr><td><code>WM_WAKEUP</code></td><td>Triggers core app tick</td></tr>
+</table>
+
+<h3>Layout System</h3>
+<p>The <code>updateLayout()</code> function computes the content area by subtracting the tab bar
+(30px, only shown when &gt;1 tab) and search bar (30px, only when active) from the client
+rect. The search bar is split into the EDIT control (full width minus 100px) and the
+count label (100px, right-aligned). The remaining area is passed to
+<code>Tab.layout()</code> for recursive split positioning.</p>
+
+<hr>
+
+<h2>2. Surface.zig — Terminal Surface (545 lines)</h2>
+
+<h3>Purpose</h3>
+<p>Each Surface is a child window with its own WGL OpenGL context. It handles all
+input events (keyboard, mouse, scroll) and provides the interface expected by
+the cross-platform <code>CoreSurface</code>.</p>
+
+<h3>Struct Fields</h3>
+<table>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>child_hwnd</code></td><td><code>?HWND</code></td><td>Child window handle</td></tr>
+<tr><td><code>app</code></td><td><code>?*App</code></td><td>Pointer back to the parent App</td></tr>
+<tr><td><code>hdc</code></td><td><code>?HDC</code></td><td>GDI device context for WGL</td></tr>
+<tr><td><code>hglrc</code></td><td><code>?HGLRC</code></td><td>WGL OpenGL rendering context</td></tr>
+<tr><td><code>core_surface</code></td><td><code>?*CoreSurface</code></td><td>The cross-platform core surface</td></tr>
+<tr><td><code>width</code>, <code>height</code></td><td><code>u32</code></td><td>Current dimensions in pixels</td></tr>
+<tr><td><code>cursor_pos</code></td><td><code>CursorPos</code></td><td>Last known cursor position</td></tr>
+</table>
+
+<h3>Key Functions</h3>
+<table>
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>registerClass()</code></td><td>Registers "GhosttySurface" <code>WNDCLASSEXW</code> with <code>CS_OWNDC</code></td></tr>
+<tr><td><code>init(parent, app)</code></td><td>Creates child window (<code>WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS</code>), sets up WGL pixel format + context</td></tr>
+<tr><td><code>deinit()</code></td><td>Deletes GL context, releases DC, destroys child window</td></tr>
+<tr><td><code>handleKeyEvent()</code></td><td>Translates scancodes, peeks <code>WM_CHAR</code> for text, calls <code>core_surface.keyCallback()</code></td></tr>
+<tr><td><code>surfaceWndProc()</code></td><td>Handles all child window messages (size, paint, focus, keys, mouse, scroll, context menu)</td></tr>
+</table>
+
+<h3>apprt Interface Methods</h3>
+<p>These are called by <code>CoreSurface</code> and the renderer:</p>
+<table>
+<tr><th>Method</th><th>Description</th></tr>
+<tr><td><code>getContentScale()</code></td><td>Returns <code>{1.0, 1.0}</code> (DPI awareness TODO)</td></tr>
+<tr><td><code>getSize()</code></td><td>Returns current width/height</td></tr>
+<tr><td><code>getCursorPos()</code></td><td>Returns cached cursor position</td></tr>
+<tr><td><code>supportsClipboard()</code></td><td>Returns <code>true</code> for <code>.standard</code></td></tr>
+<tr><td><code>clipboardRequest()</code></td><td>Reads from Win32 clipboard (<code>CF_UNICODETEXT</code>)</td></tr>
+<tr><td><code>setClipboard()</code></td><td>Writes to Win32 clipboard</td></tr>
+<tr><td><code>defaultTermioEnv()</code></td><td>Returns environment for child process (HOME, TERM, etc.)</td></tr>
+<tr><td><code>swapBuffers()</code></td><td>Calls <code>SwapBuffers(hdc)</code></td></tr>
+<tr><td><code>makeContextCurrent()</code></td><td>Calls <code>wglMakeCurrent(hdc, hglrc)</code></td></tr>
+</table>
+
+<h3>Input Handling</h3>
+<p>The surface's <code>surfaceWndProc</code> handles:</p>
+<ul>
+<li><code>WM_KEYDOWN</code>/<code>WM_KEYUP</code>/<code>WM_SYSKEYDOWN</code>/<code>WM_SYSKEYUP</code> — keyboard input with <code>PeekMessage</code> for <code>WM_CHAR</code></li>
+<li><code>WM_LBUTTONDOWN</code>/<code>WM_MBUTTONDOWN</code> — left/middle mouse button</li>
+<li><code>WM_RBUTTONDOWN</code> — right-click (core first, then context menu if not consumed)</li>
+<li><code>WM_MOUSEWHEEL</code>/<code>WM_MOUSEHWHEEL</code> — vertical and horizontal scroll</li>
+<li><code>WM_MOUSEMOVE</code> — cursor tracking</li>
+<li><code>WM_SETFOCUS</code>/<code>WM_KILLFOCUS</code> — focus callbacks to core + App notification</li>
+</ul>
+
+<hr>
+
+<h2>3. Tab.zig — Split Tree (236 lines)</h2>
+
+<h3>Purpose</h3>
+<p>Manages the binary split tree within a single tab. Each tab has a root
+<code>SplitNode</code> that is either a leaf (single surface) or a split (two children
+with a direction and ratio).</p>
+
+<h3>Data Structures</h3>
+<pre><code>SplitNode = union(enum) {
+    leaf: *Surface,
+    split: Split,
+};
+
+Split = struct {
+    direction: Direction,  // .horizontal or .vertical
+    ratio: f32 = 0.5,     // 0.0 to 1.0, position of divider
+    first: *SplitNode,     // left or top child
+    second: *SplitNode,    // right or bottom child
+};
+
+Tab = struct {
+    root: *SplitNode,
+    focused: *Surface,
+    title: []const u8,
+    alloc: Allocator,
+};</code></pre>
+
+<h3>Operations</h3>
+<table>
+<tr><th>Function</th><th>Complexity</th><th>Description</th></tr>
+<tr><td><code>init(surface)</code></td><td>O(1)</td><td>Creates a tab with a single leaf node</td></tr>
+<tr><td><code>deinit()</code></td><td>O(n)</td><td>Frees all split nodes (not surfaces)</td></tr>
+<tr><td><code>splitFocused(surface, dir)</code></td><td>O(n)</td><td>Finds focused leaf, replaces with split containing original + new</td></tr>
+<tr><td><code>removeSurface(surface)</code></td><td>O(n)</td><td>Removes surface, collapses parent split. Returns false if last</td></tr>
+<tr><td><code>layout(rect)</code></td><td>O(n)</td><td>Recursively positions all child HWNDs via <code>MoveWindow</code></td></tr>
+<tr><td><code>equalize()</code></td><td>O(n)</td><td>Recursively resets all split ratios to 0.5</td></tr>
+</table>
+
+<h3>Layout Algorithm</h3>
+<p>For each split node, the available rectangle is divided by the ratio along the
+split direction (horizontal → left/right, vertical → top/bottom). A 4px divider
+gap is subtracted between the two halves. Each child recursively receives its
+sub-rectangle. Leaf nodes call <code>MoveWindow</code> on their surface's child HWND and
+notify the core of the size change.</p>
+
+<hr>
+
+<h2>4. win32.zig — API Declarations (446 lines)</h2>
+
+<h3>Purpose</h3>
+<p>Declares all Win32 API types, constants, and <code>extern</code> function imports used by
+the apprt. Organized by category: types, messages, styles, controls, menus,
+GDI, positioning, monitors, and WGL.</p>
+
+<p>See <a href="api-reference.html">API Reference</a> for the complete listing.</p>
+
+<hr>
+
+<h2>5. Control Flow</h2>
+
+<h3>Startup Sequence</h3>
+<ol>
+<li><code>main_ghostty.zig</code> calls <code>App.init()</code></li>
+<li><code>init()</code> loads config from <code>%LOCALAPPDATA%\ghostty\config.ghostty</code></li>
+<li>Creates the main window (<code>GhosttyWindow</code> class, <code>WS_OVERLAPPEDWINDOW</code>)</li>
+<li>Registers <code>GhosttySurface</code> child window class</li>
+<li>Stores <code>self</code> pointer in <code>GWLP_USERDATA</code></li>
+<li>Creates search bar (EDIT + STATIC, hidden)</li>
+<li>Creates menu bar (6 popup menus)</li>
+<li>Creates first tab → creates surface → creates core surface</li>
+<li>Enters <code>run()</code> event loop</li>
+</ol>
+
+<h3>Event Loop</h3>
+<pre><code>while (running) {
+    GetMessageW(&amp;msg)
+    // Intercept search EDIT keys (Escape, Enter) before dispatch
+    if (search_active &amp;&amp; msg targets search EDIT) { handle; continue }
+    TranslateMessage(&amp;msg)
+    DispatchMessageW(&amp;msg)
+}</code></pre>
+
+<h3>Rendering Pipeline</h3>
+<ol>
+<li>Core's renderer thread calls <code>makeContextCurrent()</code> → <code>wglMakeCurrent</code></li>
+<li>OpenGL commands render terminal content via <code>GenericRenderer</code></li>
+<li>Calls <code>swapBuffers()</code> → <code>SwapBuffers(hdc)</code></li>
+<li>Each surface has its own GL context → multiple surfaces render independently</li>
+</ol>
+
+<h3>Input Pipeline</h3>
+<ol>
+<li>Win32 delivers <code>WM_KEYDOWN</code> to focused surface's <code>surfaceWndProc</code></li>
+<li><code>handleKeyEvent()</code> translates scancode via <code>translateScancode()</code></li>
+<li>Peeks for pending <code>WM_CHAR</code> to get text input</li>
+<li>Gets modifier state via <code>GetKeyState()</code></li>
+<li>Calls <code>core_surface.keyCallback()</code> with full key event data</li>
+<li>Core processes the key (binding check → terminal write)</li>
+</ol>
+
+<div class="nav" style="margin-top:2rem"><a href="index.html">← Index</a> <a href="api-reference.html">API Reference →</a></div>
+</body>
+</html>

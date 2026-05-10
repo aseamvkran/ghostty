@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ghostty Win32 — Feature Guide</title>
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#c9d1d9;--muted:#8b949e;--accent:#58a6ff;--green:#7ee787;--yellow:#d29922;--red:#f85149;--code:#1c2128}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;padding:2rem;max-width:1100px;margin:0 auto}
+h1{color:var(--accent);font-size:2rem;margin-bottom:.5rem;border-bottom:2px solid var(--border);padding-bottom:.5rem}
+h2{color:var(--green);font-size:1.4rem;margin:2rem 0 1rem;border-bottom:1px solid var(--border);padding-bottom:.3rem}
+h3{color:var(--accent);font-size:1.15rem;margin:1.5rem 0 .5rem}
+p{margin-bottom:1rem}
+a{color:var(--accent)}
+code{background:var(--code);padding:.2em .4em;border-radius:4px;font-size:.9em;color:var(--accent)}
+pre{background:var(--code);padding:1rem;border-radius:8px;overflow-x:auto;margin-bottom:1rem;border:1px solid var(--border)}
+pre code{background:none;padding:0}
+table{width:100%;border-collapse:collapse;margin-bottom:1.5rem}
+th,td{padding:.6rem;text-align:left;border:1px solid var(--border)}
+th{background:var(--surface);color:var(--accent)}
+tr:nth-child(even){background:var(--surface)}
+ul,ol{margin-left:1.5rem;margin-bottom:1rem}
+li{margin-bottom:.3rem}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.5rem;margin-bottom:1.5rem}
+.nav{margin-bottom:1rem;font-size:.9em}
+.nav a{margin-right:1rem}
+kbd{display:inline-block;padding:.15em .4em;background:var(--code);border:1px solid var(--border);border-radius:4px;font-size:.85em;color:var(--text);box-shadow:0 1px 0 var(--border)}
+.shortcut{color:var(--muted);font-size:.9em}
+</style>
+</head>
+<body>
+<div class="nav"><a href="index.html">← Index</a> <a href="api-reference.html">← API Reference</a> <a href="testing.html">Testing →</a></div>
+
+<h1>Feature Guide</h1>
+<p>Complete guide to all user-facing features in the Ghostty Win32 port.</p>
+
+<h2>1. Menu Bar</h2>
+
+<p>A full Win32 menu bar with 6 menus and 30+ commands, created at startup
+via <code>CreateMenu()</code> / <code>CreatePopupMenu()</code> / <code>AppendMenuW()</code>.</p>
+
+<div class="card">
+<h3>Ghostty Menu</h3>
+<table>
+<tr><th>Item</th><th>Action</th><th>Command ID</th></tr>
+<tr><td>About Ghostty</td><td>Shows version dialog</td><td>CMD_ABOUT</td></tr>
+<tr><td>─────</td><td></td><td></td></tr>
+<tr><td>Open Configuration</td><td>Opens config.ghostty in default editor</td><td>CMD_OPEN_CONFIG</td></tr>
+<tr><td>Reload Configuration</td><td>Hot-reloads config from disk</td><td>CMD_RELOAD_CONFIG</td></tr>
+<tr><td>─────</td><td></td><td></td></tr>
+<tr><td>Quit</td><td>Exits the application</td><td>CMD_QUIT</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>File Menu</h3>
+<table>
+<tr><th>Item</th><th>Action</th></tr>
+<tr><td>New Tab</td><td>Creates a new tab with a terminal</td></tr>
+<tr><td>New Window</td><td>Creates a new application window</td></tr>
+<tr><td>─────</td><td></td></tr>
+<tr><td>Close Tab</td><td>Closes the active tab</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>Edit Menu</h3>
+<table>
+<tr><th>Item</th><th>Action</th></tr>
+<tr><td>Copy</td><td>Copies selected text to clipboard</td></tr>
+<tr><td>Paste</td><td>Pastes from clipboard</td></tr>
+<tr><td>─────</td><td></td></tr>
+<tr><td>Find...</td><td>Opens the search bar</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>View Menu</h3>
+<table>
+<tr><th>Item</th><th>Action</th></tr>
+<tr><td>Split Right</td><td>Split terminal horizontally (new pane on right)</td></tr>
+<tr><td>Split Down</td><td>Split terminal vertically (new pane below)</td></tr>
+<tr><td>─────</td><td></td></tr>
+<tr><td>Previous Split</td><td>Focus the previous pane</td></tr>
+<tr><td>Next Split</td><td>Focus the next pane</td></tr>
+<tr><td>─────</td><td></td></tr>
+<tr><td>Equalize Splits</td><td>Reset all split ratios to 50/50</td></tr>
+<tr><td>Toggle Split Zoom</td><td>Zoom focused split to fill tab</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>Window Menu</h3>
+<table>
+<tr><th>Item</th><th>Action</th></tr>
+<tr><td>Fullscreen</td><td>Toggle borderless fullscreen (F11)</td></tr>
+<tr><td>Float on Top</td><td>Toggle always-on-top (✓ checkmark)</td></tr>
+<tr><td>─────</td><td></td></tr>
+<tr><td>Minimize</td><td>Minimize window</td></tr>
+<tr><td>Zoom (Maximize)</td><td>Maximize window</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>Help Menu</h3>
+<table>
+<tr><th>Item</th><th>Action</th></tr>
+<tr><td>About Ghostty</td><td>Shows version dialog</td></tr>
+</table>
+</div>
+
+<p><strong>Implementation detail:</strong> Each menu item has a unique command ID
+(<code>CMD_COPY</code> = 100, <code>CMD_PASTE</code> = 101, etc.). When a menu item is clicked,
+<code>WM_COMMAND</code> delivers the ID via <code>LOWORD(wParam)</code>.
+<code>handleMenuCommand()</code> matches the ID and calls the appropriate action.</p>
+
+<p><strong>Comptime note:</strong> The menu bar creation uses many <code>utf8ToUtf16LeStringLiteral</code>
+calls at comptime, which exceeds Zig's default 1000-branch limit.
+<code>@setEvalBranchQuota(50000)</code> is set at the top of <code>createMenuBar()</code>.</p>
+
+<h2>2. Tab Management</h2>
+
+<p>Tabs are rendered as a custom GDI-drawn tab bar at the top of the window.
+The tab bar is 30px tall and only shown when there are 2+ tabs.</p>
+
+<h3>How Tabs Work</h3>
+<ul>
+<li>Each tab is a <code>Tab</code> struct containing a root <code>SplitNode</code>, a focused surface pointer, and a title</li>
+<li>Only the active tab's surfaces are visible — other tabs' surfaces are hidden via <code>ShowWindow(SW_HIDE)</code></li>
+<li>Tab titles come from the terminal's OSC title escape sequence</li>
+<li>The tab bar is painted in <code>WM_PAINT</code> using <code>FillRect</code> and <code>TextOutW</code></li>
+<li>Tab clicks are detected in <code>WM_LBUTTONDOWN</code> by checking if Y < 30px and computing tab index from X</li>
+</ul>
+
+<h3>Tab Actions</h3>
+<table>
+<tr><th>Action</th><th>Description</th></tr>
+<tr><td>New Tab</td><td>Creates a surface, wraps it in a Tab, appends to list, switches to it</td></tr>
+<tr><td>Close Tab</td><td>Closes all surfaces in the tab's split tree, removes tab from list</td></tr>
+<tr><td>Goto Tab</td><td>Switches active_tab index, hides old tab's surfaces, shows new tab's, relayouts</td></tr>
+<tr><td>Close Other Tabs</td><td>Closes all tabs except the active one</td></tr>
+<tr><td>Close Tabs Right</td><td>Closes all tabs to the right of the active one</td></tr>
+</table>
+
+<h2>3. Split Panes</h2>
+
+<p>Within each tab, panes are managed as a binary tree of <code>SplitNode</code> values.</p>
+
+<h3>Split Tree Structure</h3>
+<pre><code>// A tab with 3 panes arranged as:
+//   [  A  |  B  ]
+//   [     C     ]
+SplitNode::split {
+    direction: .vertical,
+    ratio: 0.5,
+    first: SplitNode::split {
+        direction: .horizontal,
+        ratio: 0.5,
+        first: SplitNode::leaf(A),
+        second: SplitNode::leaf(B),
+    },
+    second: SplitNode::leaf(C),
+}</code></pre>
+
+<h3>Operations</h3>
+<ul>
+<li><strong>Split:</strong> Find the focused leaf → replace it with a split node containing the old surface + new surface</li>
+<li><strong>Remove:</strong> Find the surface's leaf → replace the parent split with the sibling → collapse</li>
+<li><strong>Layout:</strong> Recursively divide the available rectangle along each split's direction/ratio, call <code>MoveWindow</code> on leaves</li>
+<li><strong>Equalize:</strong> Recursively set all ratios to 0.5</li>
+<li><strong>Navigate:</strong> Collect all leaves in-order, find the focused one, move prev/next</li>
+</ul>
+
+<h2>4. Search with Match Count</h2>
+
+<p>The search bar is a Win32 EDIT control with a companion STATIC label
+showing the match count.</p>
+
+<h3>Layout</h3>
+<pre><code>┌──────────────────────────────────────────┬──────────┐
+│  EDIT (search text input)                │  3/42    │
+│  WS_CHILD | WS_BORDER | ES_AUTOHSCROLL  │  STATIC  │
+│  full width minus 100px                  │  100px   │
+└──────────────────────────────────────────┴──────────┘</code></pre>
+
+<h3>Search Flow</h3>
+<ol>
+<li>User triggers search (Edit → Find, or keybinding)</li>
+<li><code>showSearch()</code> → shows EDIT + STATIC, focuses EDIT</li>
+<li>User types text → <code>EN_CHANGE</code> notification → <code>handleSearchInput()</code></li>
+<li>Input is read as UTF-16, converted to UTF-8, sent to core via <code>performBindingAction</code></li>
+<li>Core searches the terminal buffer, sends back <code>.search_total</code> and <code>.search_selected</code> actions</li>
+<li><code>updateSearchCount()</code> formats "X/Y" and updates the STATIC label</li>
+<li>User presses <kbd>Enter</kbd> → navigates to next match (or <kbd>Shift</kbd>+<kbd>Enter</kbd> for previous)</li>
+<li>User presses <kbd>Escape</kbd> → <code>hideSearch()</code> hides the bar, returns focus to surface</li>
+</ol>
+
+<h3>Count Display Formatting</h3>
+<table>
+<tr><th>State</th><th>Display</th></tr>
+<tr><td>total=42, selected=3</td><td><code>3/42</code></td></tr>
+<tr><td>total=42, selected=null</td><td><code>42 matches</code></td></tr>
+<tr><td>total=0</td><td><code>No matches</code></td></tr>
+<tr><td>total=null</td><td>(empty)</td></tr>
+<tr><td>total=1, selected=0</td><td><code>1/1</code></td></tr>
+</table>
+
+<h3>Key Interception</h3>
+<p>The search EDIT control is a standard Win32 control that processes its own
+<code>WM_KEYDOWN</code> messages before the parent window sees them. To handle
+<kbd>Escape</kbd> and <kbd>Enter</kbd>, the main message loop intercepts these keys
+<em>before</em> <code>TranslateMessage</code>/<code>DispatchMessageW</code> when the message target is
+the search EDIT.</p>
+
+<h2>5. Fullscreen</h2>
+
+<p>Fullscreen is toggled via F11 or the Window → Fullscreen menu item.</p>
+
+<h3>Enter Fullscreen</h3>
+<ol>
+<li>Save current window style: <code>GetWindowLongPtrW(GWL_STYLE)</code></li>
+<li>Save current window rect: <code>GetWindowRect()</code></li>
+<li>Remove caption and thick frame from style</li>
+<li>Get monitor bounds: <code>MonitorFromWindow(MONITOR_DEFAULTTONEAREST)</code> → <code>GetMonitorInfoW()</code></li>
+<li>Position window to fill monitor: <code>SetWindowPos()</code> with <code>SWP_FRAMECHANGED</code></li>
+</ol>
+
+<h3>Exit Fullscreen</h3>
+<ol>
+<li>Restore saved window style: <code>SetWindowLongPtrW(GWL_STYLE)</code></li>
+<li>Restore saved position/size: <code>SetWindowPos()</code> with saved rect</li>
+</ol>
+
+<h2>6. Float on Top</h2>
+
+<p>Toggled via Window → Float on Top. The menu item shows a checkmark
+when active. Uses <code>SetWindowPos</code> with <code>HWND_TOPMOST</code> to make the
+window stay above all others, and <code>HWND_NOTOPMOST</code> to restore normal
+Z-ordering.</p>
+
+<h2>7. Right-Click Context Menu</h2>
+
+<p>When a surface receives <code>WM_RBUTTONDOWN</code>, the click is first passed to the
+core (for mouse reporting). If not consumed, the parent App creates a popup
+menu with Copy/Paste/New Tab/Close Tab and shows it via <code>TrackPopupMenu</code>
+with <code>TPM_RETURNCMD</code> to get the selected item synchronously.</p>
+
+<h2>8. Keyboard Input</h2>
+
+<h3>Key Translation Pipeline</h3>
+<pre><code>WM_KEYDOWN (scancode in lParam)
+    ↓
+translateScancode() → Ghostty key enum
+    ↓
+PeekMessage(WM_CHAR) → UTF-16 text
+    ↓
+GetKeyState() → modifier flags (shift, ctrl, alt, caps)
+    ↓
+core_surface.keyCallback(key, text, mods)
+    ↓
+Core processes: binding match → terminal write</code></pre>
+
+<h3>Special Cases</h3>
+<ul>
+<li><strong>Alt+Key (WM_SYSKEYDOWN):</strong> Handled to prevent Win32 system menu activation</li>
+<li><strong>Dead keys:</strong> WM_CHAR provides the composed character</li>
+<li><strong>Extended keys:</strong> Bit 24 of lParam distinguishes left/right Ctrl, numpad Enter, etc.</li>
+<li><strong>F11:</strong> Intercepted by the surface for fullscreen toggle</li>
+</ul>
+
+<h2>9. Mouse Input</h2>
+
+<table>
+<tr><th>Message</th><th>Action</th></tr>
+<tr><td><code>WM_LBUTTONDOWN</code></td><td>Left click → core mouse callback (selection, links)</td></tr>
+<tr><td><code>WM_RBUTTONDOWN</code></td><td>Right click → core first, then context menu</td></tr>
+<tr><td><code>WM_MBUTTONDOWN</code></td><td>Middle click → core mouse callback</td></tr>
+<tr><td><code>WM_MOUSEWHEEL</code></td><td>Scroll → <code>GET_WHEEL_DELTA_WPARAM</code>, normalized by <code>WHEEL_DELTA</code> (120)</td></tr>
+<tr><td><code>WM_MOUSEMOVE</code></td><td>Cursor tracking → cached position for <code>getCursorPos()</code></td></tr>
+</table>
+
+<h2>10. Clipboard</h2>
+
+<h3>Copy (read from terminal)</h3>
+<ol>
+<li>Core provides text via <code>setClipboard()</code></li>
+<li><code>OpenClipboard</code> → <code>EmptyClipboard</code></li>
+<li>Allocate global memory: <code>GlobalAlloc(GMEM_MOVEABLE)</code></li>
+<li>Copy UTF-16 data to global memory</li>
+<li><code>SetClipboardData(CF_UNICODETEXT)</code> → <code>CloseClipboard</code></li>
+</ol>
+
+<h3>Paste (write to terminal)</h3>
+<ol>
+<li><code>OpenClipboard</code> → <code>GetClipboardData(CF_UNICODETEXT)</code></li>
+<li><code>GlobalLock</code> → read UTF-16 → <code>GlobalUnlock</code></li>
+<li>Convert UTF-16 to UTF-8 → send to core</li>
+<li><code>CloseClipboard</code></li>
+</ol>
+
+<h2>11. Configuration</h2>
+
+<h3>Config File Location</h3>
+<pre><code>%LOCALAPPDATA%\ghostty\config.ghostty</code></pre>
+
+<h3>Supported Settings</h3>
+<table>
+<tr><th>Setting</th><th>Description</th><th>Example</th></tr>
+<tr><td><code>font-family</code></td><td>Terminal font face</td><td><code>JetBrains Mono</code></td></tr>
+<tr><td><code>font-size</code></td><td>Font size in points</td><td><code>12</code></td></tr>
+<tr><td><code>theme</code></td><td>Color theme name</td><td><code>catppuccin-mocha</code></td></tr>
+<tr><td><code>background-opacity</code></td><td>Window background opacity (0.0-1.0)</td><td><code>0.95</code></td></tr>
+<tr><td><code>command</code></td><td>Shell to launch</td><td><code>pwsh.exe</code></td></tr>
+</table>
+
+<h3>Hot Reload</h3>
+<p>The Ghostty → Reload Configuration menu item re-reads the config file
+from disk and replaces the active config. No restart required. Font, theme,
+and other visual changes take effect immediately.</p>
+
+<div class="nav" style="margin-top:2rem"><a href="index.html">← Index</a> <a href="api-reference.html">← API Reference</a> <a href="testing.html">Testing →</a></div>
+</body>
+</html>

@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ghostty Win32 — Testing Guide</title>
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#c9d1d9;--muted:#8b949e;--accent:#58a6ff;--green:#7ee787;--yellow:#d29922;--red:#f85149;--code:#1c2128}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;padding:2rem;max-width:1100px;margin:0 auto}
+h1{color:var(--accent);font-size:2rem;margin-bottom:.5rem;border-bottom:2px solid var(--border);padding-bottom:.5rem}
+h2{color:var(--green);font-size:1.4rem;margin:2rem 0 1rem;border-bottom:1px solid var(--border);padding-bottom:.3rem}
+h3{color:var(--accent);font-size:1.15rem;margin:1.5rem 0 .5rem}
+p{margin-bottom:1rem}
+a{color:var(--accent)}
+code{background:var(--code);padding:.2em .4em;border-radius:4px;font-size:.9em;color:var(--accent)}
+pre{background:var(--code);padding:1rem;border-radius:8px;overflow-x:auto;margin-bottom:1rem;border:1px solid var(--border)}
+pre code{background:none;padding:0}
+table{width:100%;border-collapse:collapse;margin-bottom:1.5rem}
+th,td{padding:.6rem;text-align:left;border:1px solid var(--border)}
+th{background:var(--surface);color:var(--accent)}
+tr:nth-child(even){background:var(--surface)}
+ul,ol{margin-left:1.5rem;margin-bottom:1rem}
+li{margin-bottom:.3rem}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.5rem;margin-bottom:1.5rem}
+.nav{margin-bottom:1rem;font-size:.9em}
+.nav a{margin-right:1rem}
+.pass{color:var(--green);font-weight:bold}
+.total{color:var(--accent);font-weight:bold}
+</style>
+</head>
+<body>
+<div class="nav"><a href="index.html">← Index</a> <a href="features.html">← Features</a> <a href="changelog.html">Changelog →</a></div>
+
+<h1>Testing Guide</h1>
+<p><span class="total">26 unit tests</span> in <code>Tab_test.zig</code> (378 lines) — all <span class="pass">PASSING</span>.</p>
+
+<h2>Running Tests</h2>
+
+<pre><code># Run all Win32 tab tests
+zig build test -Dtest-filter="Tab"
+
+# Run search count format tests
+zig build test -Dtest-filter="search count"
+
+# Run a specific test
+zig build test -Dtest-filter="Tab.splitFocused creates a horizontal split"
+
+# Run all tests (slow — full test suite)
+zig build test</code></pre>
+
+<h2>Testing Strategy</h2>
+
+<div class="card">
+<h3>Challenge</h3>
+<p>The Win32 apprt modules (App.zig, Surface.zig) depend on Win32 API calls
+(<code>CreateWindowExW</code>, <code>MoveWindow</code>, WGL functions, etc.) that require a running
+Windows desktop environment with HWNDs. This makes them impossible to unit
+test in a pure headless environment.</p>
+
+<h3>Solution</h3>
+<p>Tests focus on the <strong>pure logic</strong> that doesn't require Win32:</p>
+<ul>
+<li><strong>Split tree management:</strong> Create/split/remove nodes, tree structure validation</li>
+<li><strong>Equalize algorithm:</strong> Verify ratio resetting across nested trees</li>
+<li><strong>Search count formatting:</strong> Pure string formatting logic matching App.updateSearchCount</li>
+</ul>
+<p>Mock surfaces use properly aligned pointer addresses via
+<code>@ptrFromInt(@alignOf(Surface) * (id + 1))</code>. The split tree only stores and
+compares pointers — it never dereferences them during tree operations.</p>
+</div>
+
+<h2>Test Inventory</h2>
+
+<h3>Tab Initialization (1 test)</h3>
+<table>
+<tr><th>#</th><th>Test Name</th><th>Verifies</th></tr>
+<tr><td>1</td><td><code>Tab.init creates a single leaf</code></td><td>New tab has leaf root, correct focused surface</td></tr>
+</table>
+
+<h3>Split Operations (4 tests)</h3>
+<table>
+<tr><th>#</th><th>Test Name</th><th>Verifies</th></tr>
+<tr><td>2</td><td><code>Tab.splitFocused creates a horizontal split</code></td><td>Root becomes split, direction=horizontal, ratio=0.5, correct children, focus moves to new surface</td></tr>
+<tr><td>3</td><td><code>Tab.splitFocused creates a vertical split</code></td><td>direction=vertical</td></tr>
+<tr><td>4</td><td><code>Tab.splitFocused nested split</code></td><td>Splitting a non-root focused surface creates inner split node: [1 | [2 / 3]]</td></tr>
+<tr><td>5</td><td><code>Tab.splitFocused alternating directions</code></td><td>H→V→H creates 3-deep tree with correct directions: [1 | [2 / [3 | 4]]]</td></tr>
+</table>
+
+<h3>Remove Operations (5 tests)</h3>
+<table>
+<tr><th>#</th><th>Test Name</th><th>Verifies</th></tr>
+<tr><td>6</td><td><code>Tab.removeSurface from split returns true</code></td><td>Removing one child collapses to leaf, returns true (tab survives)</td></tr>
+<tr><td>7</td><td><code>Tab.removeSurface last surface returns false</code></td><td>Removing the only surface returns false (tab should close)</td></tr>
+<tr><td>8</td><td><code>Tab.removeSurface from nested split</code></td><td>Removing from inner split collapses correctly</td></tr>
+<tr><td>9</td><td><code>Tab.removeSurface updates focus</code></td><td>Removing focused surface moves focus to remaining sibling</td></tr>
+<tr><td>10</td><td><code>Tab.removeSurface first child of split</code></td><td>Removing the first (not second) child collapses correctly</td></tr>
+</table>
+
+<h3>Deep Tree Operations (2 tests)</h3>
+<table>
+<tr><th>#</th><th>Test Name</th><th>Verifies</th></tr>
+<tr><td>11</td><td><code>Tab.removeSurface from deeply nested tree</code></td><td>Sequential removals from 4-surface tree all collapse correctly</td></tr>
+<tr><td>12</td><td><code>Tab.equalize deeply nested</code></td><td>Ratios at all 3 levels reset to 0.5</td></tr>
+</table>
+
+<h3>Equalize (3 tests)</h3>
+<table>
+<tr><th>#</th><th>Test Name</th><th>Verifies</th></tr>
+<tr><td>13</td><td><code>Tab.equalize resets ratios to 0.5</code></td><td>Non-default ratio (0.7) resets to 0.5</td></tr>
+<tr><td>14</td><td><code>Tab.equalize resets nested ratios</code></td><td>Multiple non-default ratios in nested tree all reset</td></tr>
+<tr><td>15</td><td><code>Tab.equalize on leaf is no-op</code></td><td>No crash on single-surface tab</td></tr>
+</table>
+
+<h3>Error Handling (1 test)</h3>
+<table>
+<tr><th>#</th><th>Test Name</th><th>Verifies</th></tr>
+<tr><td>16</td><td><code>Tab.splitFocused error on missing node</code></td><td>Returns error.NodeNotFound when focused surface is not in tree, tab unchanged</td></tr>
+</table>
+
+<h3>Misc (1 test)</h3>
+<table>
+<tr><th>#</th><th>Test Name</th><th>Verifies</th></tr>
+<tr><td>17</td><td><code>SplitNode.Direction values</code></td><td>horizontal=0, vertical=1 enum values</td></tr>
+</table>
+
+<h3>Search Count Formatting (8 tests)</h3>
+<table>
+<tr><th>#</th><th>Test Name</th><th>Verifies</th></tr>
+<tr><td>18</td><td><code>search count format with total and selected</code></td><td>total=42, selected=2 → "3/42" (0-indexed to 1-indexed)</td></tr>
+<tr><td>19</td><td><code>search count format with total but no selected</code></td><td>total=77, selected=null → "0/77"</td></tr>
+<tr><td>20</td><td><code>search count format with no total</code></td><td>total=null → "" (empty)</td></tr>
+<tr><td>21</td><td><code>search count format first match</code></td><td>total=10, selected=0 → "1/10"</td></tr>
+<tr><td>22</td><td><code>search count format last match</code></td><td>total=5, selected=4 → "5/5"</td></tr>
+<tr><td>23</td><td><code>search count format single match</code></td><td>total=1, selected=0 → "1/1"</td></tr>
+<tr><td>24</td><td><code>search count format zero total</code></td><td>total=0 → "0/0"</td></tr>
+<tr><td>25</td><td><code>search count format large numbers</code></td><td>total=99999, selected=12345 → "12346/99999"</td></tr>
+</table>
+
+<h2>Mock Surface Technique</h2>
+
+<p>Real <code>Surface</code> objects require HWNDs and WGL contexts. Tests use mock pointers:</p>
+
+<pre><code>fn mockSurface(id: usize) *Surface {
+    // Use properly aligned addresses to satisfy Zig's safety checks
+    return @ptrFromInt(@alignOf(Surface) * (id + 1));
+}</code></pre>
+
+<p><strong>Why this works:</strong> The split tree only stores and compares surface pointers.
+It never dereferences them during tree operations (split, remove, equalize,
+find). Layout is the one function that dereferences (to call <code>MoveWindow</code>),
+but tests skip layout.</p>
+
+<p><strong>Why <code>@alignOf * (id + 1)</code>:</strong> Zig's safety checks validate pointer alignment.
+Simple <code>@ptrFromInt(id)</code> would fail because id=0 is null and other ids wouldn't
+be properly aligned for the <code>Surface</code> struct.</p>
+
+<h2>Search Count Format Function</h2>
+
+<p>Tests include a standalone <code>formatSearchCount()</code> function that replicates
+the formatting logic from <code>App.updateSearchCount()</code>. This lets us test
+the formatting without needing a real HWND for the STATIC control.</p>
+
+<pre><code>fn formatSearchCount(buf: []u8, total: ?usize, selected: ?usize) []const u8 {
+    if (total) |t| {
+        if (selected) |s| {
+            return std.fmt.bufPrint(buf, "{d}/{d}", .{ s + 1, t }) catch "";
+        } else {
+            return std.fmt.bufPrint(buf, "0/{d}", .{t}) catch "";
+        }
+    }
+    return "";
+}</code></pre>
+
+<h2>Test Infrastructure</h2>
+
+<p>Tests are integrated into the Zig build system through:</p>
+<ol>
+<li><code>src/apprt/win32.zig</code> exports <code>Tab_test</code> via <code>@import("win32/Tab_test.zig")</code></li>
+<li>The test block in <code>win32.zig</code> uses <code>@import("std").testing.refAllDecls(@This())</code></li>
+<li>This causes the Zig test runner to discover and execute all tests in <code>Tab_test.zig</code></li>
+<li>Tests use <code>std.testing.allocator</code> for leak detection</li>
+</ol>
+
+<div class="nav" style="margin-top:2rem"><a href="index.html">← Index</a> <a href="features.html">← Features</a> <a href="changelog.html">Changelog →</a></div>
+</body>
+</html>

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ghostty Win32 — Changelog</title>
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#c9d1d9;--muted:#8b949e;--accent:#58a6ff;--green:#7ee787;--yellow:#d29922;--red:#f85149;--code:#1c2128}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;padding:2rem;max-width:1100px;margin:0 auto}
+h1{color:var(--accent);font-size:2rem;margin-bottom:.5rem;border-bottom:2px solid var(--border);padding-bottom:.5rem}
+h2{color:var(--green);font-size:1.4rem;margin:2rem 0 1rem;border-bottom:1px solid var(--border);padding-bottom:.3rem}
+h3{color:var(--accent);font-size:1.15rem;margin:1.5rem 0 .5rem}
+p{margin-bottom:1rem}
+a{color:var(--accent)}
+code{background:var(--code);padding:.2em .4em;border-radius:4px;font-size:.9em;color:var(--accent)}
+pre{background:var(--code);padding:1rem;border-radius:8px;overflow-x:auto;margin-bottom:1rem;border:1px solid var(--border)}
+pre code{background:none;padding:0}
+ul,ol{margin-left:1.5rem;margin-bottom:1rem}
+li{margin-bottom:.4rem}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.5rem;margin-bottom:1.5rem}
+.nav{margin-bottom:1rem;font-size:.9em}
+.nav a{margin-right:1rem}
+.commit{color:var(--yellow);font-family:monospace;font-size:.9em}
+.tag{display:inline-block;padding:.1em .4em;border-radius:6px;font-size:.75em;font-weight:600;margin-right:.3em}
+.tag-new{background:#1b4332;color:var(--green)}
+.tag-fix{background:#3d1f00;color:#ffa657}
+.tag-mod{background:#1b3a5c;color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="nav"><a href="index.html">← Index</a> <a href="testing.html">← Testing</a></div>
+
+<h1>Changelog</h1>
+<p>Complete history of the Windows port, from initial research to current state.</p>
+
+<h2>Commit 3: Documentation &amp; README</h2>
+<p class="commit">(pending commit — current session)</p>
+
+<div class="card">
+<h3>Changes</h3>
+<ul>
+<li><span class="tag tag-new">NEW</span> <code>WINDOWS.md</code> — project-level README explaining the Windows fork</li>
+<li><span class="tag tag-new">NEW</span> <code>docs/windows-port/index.html</code> — documentation index page</li>
+<li><span class="tag tag-new">NEW</span> <code>docs/windows-port/architecture.html</code> — full architecture reference</li>
+<li><span class="tag tag-new">NEW</span> <code>docs/windows-port/api-reference.html</code> — Win32 API declaration docs</li>
+<li><span class="tag tag-new">NEW</span> <code>docs/windows-port/features.html</code> — user-facing feature guide</li>
+<li><span class="tag tag-new">NEW</span> <code>docs/windows-port/testing.html</code> — testing guide with all 26 tests</li>
+<li><span class="tag tag-new">NEW</span> <code>docs/windows-port/changelog.html</code> — this file</li>
+</ul>
+</div>
+
+<h2>Commit 2: Menu Bar, Search Count, Fullscreen, Float</h2>
+<p class="commit">3b0f27972 — win32: add menu bar, search count, fullscreen, and float-on-top</p>
+
+<div class="card">
+<h3>Features Added</h3>
+<ul>
+<li><span class="tag tag-new">NEW</span> <strong>Menu bar</strong> — 6 menus (Ghostty, File, Edit, View, Window, Help) with 30+ commands</li>
+<li><span class="tag tag-new">NEW</span> <strong>Search match count</strong> — STATIC label showing "X/Y" next to search EDIT</li>
+<li><span class="tag tag-new">NEW</span> <strong>Fullscreen</strong> — F11 toggles borderless fullscreen, saves/restores window state</li>
+<li><span class="tag tag-new">NEW</span> <strong>Float on top</strong> — HWND_TOPMOST/HWND_NOTOPMOST toggle with menu checkmark</li>
+<li><span class="tag tag-new">NEW</span> <strong>Open/reload config</strong> — ShellExecuteW for editing, hot-reload from disk</li>
+<li><span class="tag tag-new">NEW</span> <strong>Right-click context menu</strong> — popup with Copy/Paste/New Tab/Close Tab</li>
+<li><span class="tag tag-new">NEW</span> <strong>Split navigation</strong> — goto previous/next split by collecting leaves in tree order</li>
+<li><span class="tag tag-new">NEW</span> <strong>About dialog</strong> — MessageBoxW with version info</li>
+<li><span class="tag tag-new">NEW</span> 8 search count formatting tests</li>
+</ul>
+
+<h3>Bugs Fixed</h3>
+<ul>
+<li><span class="tag tag-fix">FIX</span> <strong>Focus lost after alt-tab</strong> — Added WM_ACTIVATE handler to refocus active surface child window</li>
+<li><span class="tag tag-fix">FIX</span> <strong>Search box couldn't close</strong> — EDIT control receives WM_KEYDOWN before parent. Fixed by intercepting Escape/Enter in the message loop before TranslateMessage/DispatchMessage</li>
+<li><span class="tag tag-fix">FIX</span> <strong>Menu commands not dispatched</strong> — WM_COMMAND handler only checked EN_CHANGE (HIWORD==0x300). Added routing for HIWORD==0 (menu) and HIWORD==1 (accelerator)</li>
+<li><span class="tag tag-fix">FIX</span> <strong>Comptime branch limit</strong> — createMenuBar() with many utf8ToUtf16LeStringLiteral calls exceeded 1000-branch limit. Fixed with @setEvalBranchQuota(50000)</li>
+</ul>
+
+<h3>API Additions (<code>win32.zig</code>)</h3>
+<ul>
+<li><span class="tag tag-mod">API</span> WM_ACTIVATE, VK_F11</li>
+<li><span class="tag tag-mod">API</span> SW_HIDE, SW_SHOWMINIMIZED, SW_SHOWMAXIMIZED, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE</li>
+<li><span class="tag tag-mod">API</span> GWL_STYLE, GWL_EXSTYLE</li>
+<li><span class="tag tag-mod">API</span> MF_POPUP, MF_CHECKED, MF_UNCHECKED, MF_ENABLED, MF_DISABLED</li>
+<li><span class="tag tag-mod">API</span> CreateMenu, SetMenu, DrawMenuBar, CheckMenuItem, EnableMenuItem</li>
+<li><span class="tag tag-mod">API</span> IsZoomed, IsIconic, GetWindowRect, SetWindowPos, GetForegroundWindow</li>
+<li><span class="tag tag-mod">API</span> SWP_* constants, HWND_TOPMOST, HWND_NOTOPMOST</li>
+<li><span class="tag tag-mod">API</span> MonitorFromWindow, GetMonitorInfoW, HMONITOR, MONITORINFO</li>
+<li><span class="tag tag-mod">API</span> SS_RIGHT (STATIC right-align style)</li>
+</ul>
+</div>
+
+<h2>Commit 1: Initial Win32 Runtime</h2>
+<p class="commit">70494a08f — win32: add native Win32 application runtime</p>
+
+<div class="card">
+<h3>Features</h3>
+<ul>
+<li><span class="tag tag-new">NEW</span> <strong>App.zig</strong> — main window, event loop, tab management, search overlay</li>
+<li><span class="tag tag-new">NEW</span> <strong>Surface.zig</strong> — terminal surface as WS_CHILD with WGL context, full input handling</li>
+<li><span class="tag tag-new">NEW</span> <strong>Tab.zig</strong> — binary split tree with layout, equalize, split, remove</li>
+<li><span class="tag tag-new">NEW</span> <strong>Tab_test.zig</strong> — 18 unit tests for split tree operations</li>
+<li><span class="tag tag-new">NEW</span> <strong>win32.zig</strong> — apprt entry point exporting App, Surface, Tab</li>
+<li><span class="tag tag-new">NEW</span> <strong>src/os/win32.zig</strong> — Win32 API declarations (types, structs, externs)</li>
+</ul>
+
+<h3>Build System Changes</h3>
+<ul>
+<li><span class="tag tag-mod">MOD</span> <code>src/build/GhosttyExe.zig</code> — MSVC ABI, Windows subsystem, <code>mainCRTStartup</code> entry point</li>
+<li><span class="tag tag-mod">MOD</span> <code>src/build/SharedDeps.zig</code> — link opengl32, user32, gdi32, kernel32, shell32</li>
+<li><span class="tag tag-mod">MOD</span> <code>src/apprt.zig</code> — added <code>.win32</code> to Runtime enum</li>
+<li><span class="tag tag-mod">MOD</span> <code>src/apprt/runtime.zig</code> — <code>.win32</code> option, auto-detect on Windows</li>
+<li><span class="tag tag-mod">MOD</span> <code>src/apprt/structs.zig</code> — <code>.win32</code> variant for ContentScale and IMEPos</li>
+<li><span class="tag tag-mod">MOD</span> <code>src/apprt/action.zig</code> — <code>.win32 =&gt; void</code> for InitialSize GObject switch</li>
+<li><span class="tag tag-mod">MOD</span> <code>src/terminal/mouse.zig</code> — <code>.win32 =&gt; void</code> for Shape GObject switch</li>
+<li><span class="tag tag-mod">MOD</span> <code>src/main_ghostty.zig</code> — import win32 apprt</li>
+<li><span class="tag tag-mod">MOD</span> <code>src/os/main.zig</code> — import win32.zig</li>
+<li><span class="tag tag-mod">MOD</span> <code>src/config/Config.zig</code> — Windows config file path</li>
+<li><span class="tag tag-mod">MOD</span> <code>src/renderer/OpenGL.zig</code> — Win32 swapBuffers/makeContextCurrent</li>
+<li><span class="tag tag-mod">MOD</span> <code>src/renderer/Thread.zig</code> — Win32 surface type</li>
+</ul>
+
+<h3>Core Features at Launch</h3>
+<ul>
+<li>GPU-accelerated OpenGL 4.3+ rendering via WGL + GLAD</li>
+<li>ConPTY-based terminal sessions (PowerShell, cmd.exe)</li>
+<li>Multiple tabs with GDI-drawn tab bar</li>
+<li>Horizontal and vertical split panes</li>
+<li>Incremental search with Escape/Enter handling</li>
+<li>Clipboard support (CF_UNICODETEXT)</li>
+<li>Full keyboard input with scancode translation</li>
+<li>Mouse input (click, scroll, movement tracking)</li>
+<li>Window title updates via OSC escape sequences</li>
+<li>Config file support (%LOCALAPPDATA%\ghostty\config.ghostty)</li>
+</ul>
+
+<h3>Known Limitations</h3>
+<ul>
+<li>DPI awareness not implemented (getContentScale returns 1.0)</li>
+<li>wglMakeCurrent warning during shutdown (non-fatal)</li>
+<li>Single window only (new_window creates a tab instead)</li>
+</ul>
+</div>
+
+<h2>Pre-Implementation: Research &amp; Design</h2>
+
+<div class="card">
+<h3>Research Phase</h3>
+<p>Before any code was written, extensive research was conducted into:</p>
+<ul>
+<li>Ghostty's architecture — apprt interface, core/renderer separation, config system</li>
+<li>Win32 windowing — WNDCLASSEXW, message loop, child windows, WM_COMMAND routing</li>
+<li>WGL OpenGL — per-window device contexts, pixel format, context creation, GLAD integration</li>
+<li>ConPTY — Windows pseudo-terminal API, integration with existing <code>src/pty.zig</code></li>
+<li>Font backends — DirectWrite availability, existing font discovery in Ghostty</li>
+<li>Existing Windows support in the codebase — pty.zig, os/windows.zig, renderer hooks</li>
+</ul>
+<p>The design document (<a href="design.html">design.html</a>) captures the full analysis.</p>
+</div>
+
+<h2>Bug Resolution Timeline</h2>
+
+<table>
+<tr><th>Issue</th><th>Symptom</th><th>Root Cause</th><th>Fix</th></tr>
+<tr>
+<td>Focus lost</td>
+<td>After Alt-Tab, terminal doesn't receive keyboard input</td>
+<td>Win32 focuses the parent window, not the child surface</td>
+<td>WM_ACTIVATE handler calls SetFocus on active surface child HWND</td>
+</tr>
+<tr>
+<td>Search stuck</td>
+<td>Pressing Escape in search bar doesn't close it</td>
+<td>EDIT control processes WM_KEYDOWN before parent wndProc sees it</td>
+<td>Intercept keys in GetMessageW loop before TranslateMessage</td>
+</tr>
+<tr>
+<td>Menus dead</td>
+<td>Clicking menu items has no effect</td>
+<td>WM_COMMAND handler only matched EN_CHANGE (0x300)</td>
+<td>Added HIWORD==0 (menu) and HIWORD==1 (accelerator) routing</td>
+</tr>
+<tr>
+<td>Compile fail</td>
+<td>"evaluation exceeded 1000 backwards branches"</td>
+<td>Many utf8ToUtf16LeStringLiteral comptime calls in createMenuBar</td>
+<td>@setEvalBranchQuota(50000) at function start</td>
+</tr>
+<tr>
+<td>Test crash</td>
+<td>Exit code 3 (alignment check failure)</td>
+<td>Mock pointers with @ptrFromInt(id) fail Zig's alignment checks</td>
+<td>@ptrFromInt(@alignOf(Surface) * (id + 1))</td>
+</tr>
+<tr>
+<td>Test compile</td>
+<td>Missing switch cases for .win32 enum</td>
+<td>Two switches in action.zig and mouse.zig didn't handle .win32</td>
+<td>Added <code>.none, .win32 =&gt; void</code> to both switches</td>
+</tr>
+<tr>
+<td>Font not found</td>
+<td>Terminal renders with wrong font</td>
+<td>Config had "Maple Mono NF" but only "Maple Mono NF CN" installed</td>
+<td>Updated config file font-family</td>
+</tr>
+</table>
+
+<div class="nav" style="margin-top:2rem"><a href="index.html">← Index</a> <a href="testing.html">← Testing</a></div>
+</body>
+</html>
