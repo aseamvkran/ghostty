@@ -218,3 +218,19 @@ fn layoutNode(node: *SplitNode, rect: windows.RECT) void {
         },
     }
 }
+
+/// Reset all split ratios to 0.5 (equalize).
+pub fn equalize(self: *Tab) void {
+    equalizeNode(self.root);
+}
+
+fn equalizeNode(node: *SplitNode) void {
+    switch (node.*) {
+        .leaf => {},
+        .split => |*s| {
+            s.ratio = 0.5;
+            equalizeNode(s.first);
+            equalizeNode(s.second);
+        },
+    }
+}

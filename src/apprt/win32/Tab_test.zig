@@ -153,3 +153,226 @@ test "SplitNode.Direction values" {
     try testing.expectEqual(@intFromEnum(Tab.SplitNode.Direction.horizontal), 0);
     try testing.expectEqual(@intFromEnum(Tab.SplitNode.Direction.vertical), 1);
 }
+
+test "Tab.equalize resets ratios to 0.5" {
+    const alloc = testing.allocator;
+    var tab = try Tab.init(alloc, mockSurface(1));
+    defer tab.deinit();
+
+    try tab.splitFocused(mockSurface(2), .horizontal);
+
+    // Manually change the ratio
+    tab.root.split.ratio = 0.7;
+    try testing.expectEqual(tab.root.split.ratio, 0.7);
+
+    // Equalize should reset to 0.5
+    tab.equalize();
+    try testing.expectEqual(tab.root.split.ratio, 0.5);
+}
+
+test "Tab.equalize resets nested ratios" {
+    const alloc = testing.allocator;
+    var tab = try Tab.init(alloc, mockSurface(1));
+    defer tab.deinit();
+
+    // Build: [1 | [2 / 3]]
+    try tab.splitFocused(mockSurface(2), .horizontal);
+    try tab.splitFocused(mockSurface(3), .vertical);
+
+    // Set non-default ratios
+    tab.root.split.ratio = 0.3;
+    tab.root.split.second.split.ratio = 0.8;
+
+    tab.equalize();
+
+    try testing.expectEqual(tab.root.split.ratio, 0.5);
+    try testing.expectEqual(tab.root.split.second.split.ratio, 0.5);
+}
+
+test "Tab.equalize on leaf is no-op" {
+    const alloc = testing.allocator;
+    var tab = try Tab.init(alloc, mockSurface(1));
+    defer tab.deinit();
+
+    // Should not crash
+    tab.equalize();
+    try testing.expect(tab.root.* == .leaf);
+}
+
+test "Tab.splitFocused alternating directions" {
+    const alloc = testing.allocator;
+    var tab = try Tab.init(alloc, mockSurface(1));
+    defer tab.deinit();
+
+    // Split H: [1 | 2]
+    try tab.splitFocused(mockSurface(2), .horizontal);
+    // Focus on 2, split V: [1 | [2 / 3]]
+    try tab.splitFocused(mockSurface(3), .vertical);
+    // Focus on 3, split H: [1 | [2 / [3 | 4]]]
+    try tab.splitFocused(mockSurface(4), .horizontal);
+
+    try testing.expectEqual(tab.focused, mockSurface(4));
+    try testing.expect(tab.root.* == .split);
+    try testing.expectEqual(tab.root.split.direction, .horizontal);
+
+    const inner1 = tab.root.split.second;
+    try testing.expect(inner1.* == .split);
+    try testing.expectEqual(inner1.split.direction, .vertical);
+
+    const inner2 = inner1.split.second;
+    try testing.expect(inner2.* == .split);
+    try testing.expectEqual(inner2.split.direction, .horizontal);
+    try testing.expectEqual(inner2.split.first.leaf, mockSurface(3));
+    try testing.expectEqual(inner2.split.second.leaf, mockSurface(4));
+}
+
+test "Tab.removeSurface from deeply nested tree" {
+    const alloc = testing.allocator;
+    var tab = try Tab.init(alloc, mockSurface(1));
+    defer tab.deinit();
+
+    // Build: [1 | [2 / [3 | 4]]]
+    try tab.splitFocused(mockSurface(2), .horizontal);
+    try tab.splitFocused(mockSurface(3), .vertical);
+    try tab.splitFocused(mockSurface(4), .horizontal);
+
+    // Remove 4: should collapse to [1 | [2 / 3]]
+    _ = tab.removeSurface(mockSurface(4));
+    try testing.expect(tab.root.split.second.split.second.* == .leaf);
+    try testing.expectEqual(tab.root.split.second.split.second.leaf, mockSurface(3));
+
+    // Remove 2: should collapse to [1 | 3]
+    _ = tab.removeSurface(mockSurface(2));
+    try testing.expect(tab.root.* == .split);
+    try testing.expectEqual(tab.root.split.first.leaf, mockSurface(1));
+    try testing.expectEqual(tab.root.split.second.leaf, mockSurface(3));
+
+    // Remove 3: should collapse to just 1
+    const alive = tab.removeSurface(mockSurface(3));
+    try testing.expect(alive);
+    try testing.expect(tab.root.* == .leaf);
+    try testing.expectEqual(tab.root.leaf, mockSurface(1));
+}
+
+test "Tab.removeSurface first child of split" {
+    const alloc = testing.allocator;
+    var tab = try Tab.init(alloc, mockSurface(1));
+    defer tab.deinit();
+
+    try tab.splitFocused(mockSurface(2), .horizontal);
+
+    // Focus is on 2, remove the first surface (1)
+    tab.focused = mockSurface(1);
+    _ = tab.removeSurface(mockSurface(1));
+
+    // Root should be leaf with surface 2
+    try testing.expect(tab.root.* == .leaf);
+    try testing.expectEqual(tab.root.leaf, mockSurface(2));
+    try testing.expectEqual(tab.focused, mockSurface(2));
+}
+
+test "Tab.equalize deeply nested" {
+    const alloc = testing.allocator;
+    var tab = try Tab.init(alloc, mockSurface(1));
+    defer tab.deinit();
+
+    // Build 4-deep tree
+    try tab.splitFocused(mockSurface(2), .horizontal);
+    try tab.splitFocused(mockSurface(3), .vertical);
+    try tab.splitFocused(mockSurface(4), .horizontal);
+
+    // Set all ratios to non-default
+    tab.root.split.ratio = 0.2;
+    tab.root.split.second.split.ratio = 0.9;
+    tab.root.split.second.split.second.split.ratio = 0.1;
+
+    tab.equalize();
+
+    try testing.expectEqual(tab.root.split.ratio, 0.5);
+    try testing.expectEqual(tab.root.split.second.split.ratio, 0.5);
+    try testing.expectEqual(tab.root.split.second.split.second.split.ratio, 0.5);
+}
+
+test "Tab.splitFocused error on missing node" {
+    const alloc = testing.allocator;
+    var tab = try Tab.init(alloc, mockSurface(1));
+    defer tab.deinit();
+
+    // Set focused to a surface not in the tree
+    tab.focused = mockSurface(99);
+
+    // Should fail with NodeNotFound
+    try testing.expectError(error.NodeNotFound, tab.splitFocused(mockSurface(2), .horizontal));
+
+    // Tab should remain unchanged
+    try testing.expect(tab.root.* == .leaf);
+    try testing.expectEqual(tab.root.leaf, mockSurface(1));
+}
+
+// -----------------------------------------------------------------------
+// Search count formatting tests (pure logic, no HWND needed)
+// -----------------------------------------------------------------------
+
+/// Format search count text the same way App.updateSearchCount does.
+fn formatSearchCount(
+    buf: []u8,
+    total: ?usize,
+    selected: ?usize,
+) []const u8 {
+    if (total) |t| {
+        if (selected) |s| {
+            return std.fmt.bufPrint(buf, "{d}/{d}", .{ s + 1, t }) catch "";
+        } else {
+            return std.fmt.bufPrint(buf, "0/{d}", .{t}) catch "";
+        }
+    }
+    return "";
+}
+
+test "search count format with total and selected" {
+    var buf: [32]u8 = undefined;
+    const result = formatSearchCount(&buf, 42, 2);
+    try testing.expectEqualStrings("3/42", result);
+}
+
+test "search count format with total but no selected" {
+    var buf: [32]u8 = undefined;
+    const result = formatSearchCount(&buf, 77, null);
+    try testing.expectEqualStrings("0/77", result);
+}
+
+test "search count format with no total" {
+    var buf: [32]u8 = undefined;
+    const result = formatSearchCount(&buf, null, null);
+    try testing.expectEqualStrings("", result);
+}
+
+test "search count format first match" {
+    var buf: [32]u8 = undefined;
+    const result = formatSearchCount(&buf, 10, 0);
+    try testing.expectEqualStrings("1/10", result);
+}
+
+test "search count format last match" {
+    var buf: [32]u8 = undefined;
+    const result = formatSearchCount(&buf, 5, 4);
+    try testing.expectEqualStrings("5/5", result);
+}
+
+test "search count format single match" {
+    var buf: [32]u8 = undefined;
+    const result = formatSearchCount(&buf, 1, 0);
+    try testing.expectEqualStrings("1/1", result);
+}
+
+test "search count format zero total" {
+    var buf: [32]u8 = undefined;
+    const result = formatSearchCount(&buf, 0, null);
+    try testing.expectEqualStrings("0/0", result);
+}
+
+test "search count format large numbers" {
+    var buf: [32]u8 = undefined;
+    const result = formatSearchCount(&buf, 99999, 12345);
+    try testing.expectEqualStrings("12346/99999", result);
+}
