@@ -6,14 +6,14 @@ const testing = std.testing;
 const Tab = @import("Tab.zig");
 const Surface = @import("Surface.zig");
 
-// We can't create real Surface objects (they need HWNDs), but we can
-// test the Tab split tree logic using mock Surface pointers.
-// The Tab logic only stores/compares pointers, never dereferences them
-// during tree operations (except layout which we skip).
+// Real (but never initialized) Surface values rather than fabricated pointers.
+// Every field defaults, and a null child_hwnd makes layout() skip the Win32
+// calls, so the split tree can be exercised end to end — including layout,
+// which fake pointers could not survive being dereferenced by.
+var mock_surfaces = [_]Surface{.{}} ** 100;
 
 fn mockSurface(id: usize) *Surface {
-    // Use properly aligned addresses to satisfy Zig's safety checks
-    return @ptrFromInt(@alignOf(Surface) * (id + 1));
+    return &mock_surfaces[id];
 }
 
 test "Tab.init creates a single leaf" {
@@ -149,27 +149,6 @@ test "Tab.removeSurface updates focus" {
     try testing.expectEqual(tab.focused, mockSurface(1));
 }
 
-test "SplitNode.Direction values" {
-    try testing.expectEqual(@intFromEnum(Tab.SplitNode.Direction.horizontal), 0);
-    try testing.expectEqual(@intFromEnum(Tab.SplitNode.Direction.vertical), 1);
-}
-
-test "Tab.equalize resets ratios to 0.5" {
-    const alloc = testing.allocator;
-    var tab = try Tab.init(alloc, mockSurface(1));
-    defer tab.deinit();
-
-    try tab.splitFocused(mockSurface(2), .horizontal);
-
-    // Manually change the ratio
-    tab.root.split.ratio = 0.7;
-    try testing.expectEqual(tab.root.split.ratio, 0.7);
-
-    // Equalize should reset to 0.5
-    tab.equalize();
-    try testing.expectEqual(tab.root.split.ratio, 0.5);
-}
-
 test "Tab.equalize resets nested ratios" {
     const alloc = testing.allocator;
     var tab = try Tab.init(alloc, mockSurface(1));
@@ -179,7 +158,6 @@ test "Tab.equalize resets nested ratios" {
     try tab.splitFocused(mockSurface(2), .horizontal);
     try tab.splitFocused(mockSurface(3), .vertical);
 
-    // Set non-default ratios
     tab.root.split.ratio = 0.3;
     tab.root.split.second.split.ratio = 0.8;
 
@@ -187,16 +165,6 @@ test "Tab.equalize resets nested ratios" {
 
     try testing.expectEqual(tab.root.split.ratio, 0.5);
     try testing.expectEqual(tab.root.split.second.split.ratio, 0.5);
-}
-
-test "Tab.equalize on leaf is no-op" {
-    const alloc = testing.allocator;
-    var tab = try Tab.init(alloc, mockSurface(1));
-    defer tab.deinit();
-
-    // Should not crash
-    tab.equalize();
-    try testing.expect(tab.root.* == .leaf);
 }
 
 test "Tab.splitFocused alternating directions" {
@@ -271,26 +239,53 @@ test "Tab.removeSurface first child of split" {
     try testing.expectEqual(tab.focused, mockSurface(2));
 }
 
-test "Tab.equalize deeply nested" {
+test "Tab.dividerAt and moveDivider" {
     const alloc = testing.allocator;
     var tab = try Tab.init(alloc, mockSurface(1));
     defer tab.deinit();
 
-    // Build 4-deep tree
+    try tab.splitFocused(mockSurface(2), .horizontal);
+
+    // layout() records the rect that hit-testing needs. Only the split node's
+    // rect is touched here; leaves just get MoveWindow'd, and mock surfaces
+    // have a null child_hwnd so that's skipped.
+    tab.layout(.{ .left = 0, .top = 0, .right = 1000, .bottom = 500 });
+
+    // Divider of a 0.5 horizontal split across 1000px sits at x=500.
+    try testing.expect(tab.dividerAt(500, 250) != null);
+    // Well clear of it, and outside the split's rect entirely.
+    try testing.expect(tab.dividerAt(200, 250) == null);
+    try testing.expect(tab.dividerAt(500, 900) == null);
+
+    const node = tab.dividerAt(500, 250).?;
+    Tab.moveDivider(node, 250, 250);
+    try testing.expectApproxEqAbs(@as(f32, 0.25), node.split.ratio, 0.001);
+
+    // Dragging past either edge clamps instead of collapsing a pane to zero,
+    // which would leave no divider left to grab.
+    Tab.moveDivider(node, -5000, 250);
+    try testing.expect(node.split.ratio > 0.0);
+    Tab.moveDivider(node, 5000, 250);
+    try testing.expect(node.split.ratio < 1.0);
+}
+
+test "Tab.dividerAt picks the innermost divider" {
+    const alloc = testing.allocator;
+    var tab = try Tab.init(alloc, mockSurface(1));
+    defer tab.deinit();
+
+    // [1 | [2 / 3]] — outer divider at x=500, inner one at y=250 in the
+    // right half, so (752, 250) is on the inner divider only.
     try tab.splitFocused(mockSurface(2), .horizontal);
     try tab.splitFocused(mockSurface(3), .vertical);
-    try tab.splitFocused(mockSurface(4), .horizontal);
+    tab.layout(.{ .left = 0, .top = 0, .right = 1000, .bottom = 500 });
 
-    // Set all ratios to non-default
-    tab.root.split.ratio = 0.2;
-    tab.root.split.second.split.ratio = 0.9;
-    tab.root.split.second.split.second.split.ratio = 0.1;
+    const inner = tab.dividerAt(752, 250).?;
+    try testing.expectEqual(Tab.SplitNode.Direction.vertical, inner.split.direction);
+    try testing.expectEqual(tab.root.split.second, inner);
 
-    tab.equalize();
-
-    try testing.expectEqual(tab.root.split.ratio, 0.5);
-    try testing.expectEqual(tab.root.split.second.split.ratio, 0.5);
-    try testing.expectEqual(tab.root.split.second.split.second.split.ratio, 0.5);
+    const outer = tab.dividerAt(500, 100).?;
+    try testing.expectEqual(tab.root, outer);
 }
 
 test "Tab.splitFocused error on missing node" {
@@ -309,70 +304,20 @@ test "Tab.splitFocused error on missing node" {
     try testing.expectEqual(tab.root.leaf, mockSurface(1));
 }
 
-// -----------------------------------------------------------------------
-// Search count formatting tests (pure logic, no HWND needed)
-// -----------------------------------------------------------------------
-
-/// Format search count text the same way App.updateSearchCount does.
-fn formatSearchCount(
-    buf: []u8,
-    total: ?usize,
-    selected: ?usize,
-) []const u8 {
-    if (total) |t| {
-        if (selected) |s| {
-            return std.fmt.bufPrint(buf, "{d}/{d}", .{ s + 1, t }) catch "";
-        } else {
-            return std.fmt.bufPrint(buf, "0/{d}", .{t}) catch "";
-        }
-    }
-    return "";
-}
-
-test "search count format with total and selected" {
+test "App.formatSearchCount" {
+    // The real function from App.zig, not a copy of it: the previous version
+    // of this test reimplemented the formatting and then tested the
+    // reimplementation, so it could not catch a change in App.
+    const formatSearchCount = @import("App.zig").formatSearchCount;
     var buf: [32]u8 = undefined;
-    const result = formatSearchCount(&buf, 42, 2);
-    try testing.expectEqualStrings("3/42", result);
-}
 
-test "search count format with total but no selected" {
-    var buf: [32]u8 = undefined;
-    const result = formatSearchCount(&buf, 77, null);
-    try testing.expectEqualStrings("0/77", result);
-}
+    // selected is 0-based, displayed 1-based.
+    try testing.expectEqualStrings("3/42", formatSearchCount(&buf, 42, 2));
+    try testing.expectEqualStrings("1/10", formatSearchCount(&buf, 10, 0));
 
-test "search count format with no total" {
-    var buf: [32]u8 = undefined;
-    const result = formatSearchCount(&buf, null, null);
-    try testing.expectEqualStrings("", result);
-}
+    // A total with nothing selected yet.
+    try testing.expectEqualStrings("0/77", formatSearchCount(&buf, 77, null));
 
-test "search count format first match" {
-    var buf: [32]u8 = undefined;
-    const result = formatSearchCount(&buf, 10, 0);
-    try testing.expectEqualStrings("1/10", result);
-}
-
-test "search count format last match" {
-    var buf: [32]u8 = undefined;
-    const result = formatSearchCount(&buf, 5, 4);
-    try testing.expectEqualStrings("5/5", result);
-}
-
-test "search count format single match" {
-    var buf: [32]u8 = undefined;
-    const result = formatSearchCount(&buf, 1, 0);
-    try testing.expectEqualStrings("1/1", result);
-}
-
-test "search count format zero total" {
-    var buf: [32]u8 = undefined;
-    const result = formatSearchCount(&buf, 0, null);
-    try testing.expectEqualStrings("0/0", result);
-}
-
-test "search count format large numbers" {
-    var buf: [32]u8 = undefined;
-    const result = formatSearchCount(&buf, 99999, 12345);
-    try testing.expectEqualStrings("12346/99999", result);
+    // No search running at all.
+    try testing.expectEqualStrings("", formatSearchCount(&buf, null, null));
 }

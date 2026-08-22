@@ -72,11 +72,9 @@ src/apprt/win32/
 ├── App.zig          # Window, menu bar, tabs, search, event loop
 ├── Surface.zig      # Terminal surface with own WGL context
 ├── Tab.zig          # Binary split tree for pane management
-└── Tab_test.zig     # 26 unit tests
+└── Tab_test.zig     # Split tree + search count unit tests
 src/os/win32.zig     # Win32 API declarations
 ```
-
-See [docs/windows-port/](docs/windows-port/) for detailed HTML documentation.
 
 ## Features
 
@@ -98,7 +96,9 @@ See [docs/windows-port/](docs/windows-port/) for detailed HTML documentation.
 | Graceful surface close (exit in pane) | ✅ |
 | Keyboard/mouse input | ✅ |
 | Clipboard (copy/paste) | ✅ |
-| DPI awareness | 🔧 Planned |
+| Per-monitor DPI awareness | ✅ |
+| IME composition (CJK input) | ✅ |
+| Drag split dividers to resize | ✅ |
 | Multiple windows | 🔧 Planned |
 | Split zoom | 🔧 Planned |
 

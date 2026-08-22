@@ -5,11 +5,8 @@ const Tab = @This();
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const apprt = @import("../../apprt.zig");
 const Surface = @import("Surface.zig");
 const windows = @import("../../os/main.zig").win32;
-
-const log = std.log.scoped(.win32_tab);
 
 /// A node in the binary split tree.
 pub const SplitNode = union(enum) {
@@ -27,6 +24,10 @@ pub const SplitNode = union(enum) {
         first: *SplitNode,
         /// Second child (right or bottom)
         second: *SplitNode,
+        /// Area this split covers, recorded by layout(). Divider hit-testing
+        /// needs it, and recomputing the geometry from the root for every
+        /// mouse move would just be the same walk twice.
+        rect: windows.RECT = .{},
     };
 
     pub const Direction = enum {
@@ -35,14 +36,14 @@ pub const SplitNode = union(enum) {
     };
 };
 
+/// Divider thickness in pixels. Also the grab area for drag-resizing.
+pub const divider: i32 = 4;
+
 /// The root of the split tree for this tab.
 root: *SplitNode,
 
 /// The currently focused surface within this tab.
 focused: *Surface,
-
-/// Tab title (displayed in the tab bar).
-title: []const u8 = "Terminal",
 
 /// Allocator for managing split nodes.
 alloc: Allocator,
@@ -180,36 +181,31 @@ fn layoutNode(node: *SplitNode, rect: windows.RECT) void {
             const h = rect.bottom - rect.top;
             if (w > 0 and h > 0) {
                 if (surface.child_hwnd) |child| {
+                    // MoveWindow sends WM_SIZE, and surfaceWndProc's WM_SIZE
+                    // handler is the single place that records the new size
+                    // and notifies the core. Don't do it twice: during a live
+                    // drag-resize that doubles the resize traffic per pane.
                     _ = windows.MoveWindow(child, rect.left, rect.top, w, h, 1);
-                    surface.width = @intCast(w);
-                    surface.height = @intCast(h);
-                    if (surface.core_surface) |cs| {
-                        cs.sizeCallback(.{
-                            .width = surface.width,
-                            .height = surface.height,
-                        }) catch {};
-                    }
                 }
             }
         },
-        .split => |s| {
-            const total_w = rect.right - rect.left;
-            const total_h = rect.bottom - rect.top;
-            const divider: i32 = 4; // divider thickness in pixels
+        .split => {
+            const s = &node.split;
+            s.rect = rect;
+
+            const pos = dividerPos(s.*);
+            const half = @divTrunc(divider, 2);
 
             var first_rect = rect;
             var second_rect = rect;
-
             switch (s.direction) {
                 .horizontal => {
-                    const split_pos = rect.left + @as(i32, @intFromFloat(@as(f32, @floatFromInt(total_w)) * s.ratio));
-                    first_rect.right = split_pos - @divTrunc(divider, 2);
-                    second_rect.left = split_pos + @divTrunc(divider, 2);
+                    first_rect.right = pos - half;
+                    second_rect.left = pos + half;
                 },
                 .vertical => {
-                    const split_pos = rect.top + @as(i32, @intFromFloat(@as(f32, @floatFromInt(total_h)) * s.ratio));
-                    first_rect.bottom = split_pos - @divTrunc(divider, 2);
-                    second_rect.top = split_pos + @divTrunc(divider, 2);
+                    first_rect.bottom = pos - half;
+                    second_rect.top = pos + half;
                 },
             }
 
@@ -217,6 +213,61 @@ fn layoutNode(node: *SplitNode, rect: windows.RECT) void {
             layoutNode(s.second, second_rect);
         },
     }
+}
+
+/// Pixel position of a split's divider along its axis. Single source of truth
+/// for both layout and hit-testing, so a drag can't drift from what's drawn.
+fn dividerPos(s: SplitNode.Split) i32 {
+    const span, const origin = switch (s.direction) {
+        .horizontal => .{ s.rect.right - s.rect.left, s.rect.left },
+        .vertical => .{ s.rect.bottom - s.rect.top, s.rect.top },
+    };
+    return origin + @as(i32, @intFromFloat(@as(f32, @floatFromInt(span)) * s.ratio));
+}
+
+/// The split whose divider sits under (x, y), or null. Coordinates are in the
+/// parent window's client space, the same space layout() was given.
+pub fn dividerAt(self: *Tab, x: i32, y: i32) ?*SplitNode {
+    return dividerAtNode(self.root, x, y);
+}
+
+fn dividerAtNode(node: *SplitNode, x: i32, y: i32) ?*SplitNode {
+    const s = switch (node.*) {
+        .leaf => return null,
+        .split => |s| s,
+    };
+
+    // Descend first so the innermost divider under the cursor wins.
+    if (dividerAtNode(s.first, x, y)) |found| return found;
+    if (dividerAtNode(s.second, x, y)) |found| return found;
+
+    if (x < s.rect.left or x > s.rect.right or
+        y < s.rect.top or y > s.rect.bottom) return null;
+
+    const pos = dividerPos(s);
+    const half = @divTrunc(divider, 2);
+    return switch (s.direction) {
+        .horizontal => if (x >= pos - half and x <= pos + half) node else null,
+        .vertical => if (y >= pos - half and y <= pos + half) node else null,
+    };
+}
+
+/// Drag a divider to (x, y). Clamped so neither pane can be collapsed to
+/// nothing, which would leave a surface with no way to grab it back.
+pub fn moveDivider(node: *SplitNode, x: i32, y: i32) void {
+    const s = &node.split;
+    const span, const offset = switch (s.direction) {
+        .horizontal => .{ s.rect.right - s.rect.left, x - s.rect.left },
+        .vertical => .{ s.rect.bottom - s.rect.top, y - s.rect.top },
+    };
+    if (span <= 0) return;
+
+    const min_ratio = 0.05;
+    s.ratio = std.math.clamp(
+        @as(f32, @floatFromInt(offset)) / @as(f32, @floatFromInt(span)),
+        min_ratio,
+        1.0 - min_ratio,
+    );
 }
 
 /// Reset all split ratios to 0.5 (equalize).

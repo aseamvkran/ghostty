@@ -40,6 +40,11 @@ height: u32 = 600,
 /// Cached cursor position.
 cursor_pos: apprt.CursorPos = .{ .x = 0, .y = 0 },
 
+/// True while an IME composition is in progress. Key events are forwarded with
+/// this set so the core suppresses them: the IME owns the keystrokes until it
+/// commits, and we deliver the result as text via WM_IME_COMPOSITION.
+composing: bool = false,
+
 /// The surface child window class name.
 const SURFACE_CLASS_NAME = std.unicode.utf8ToUtf16LeStringLiteral("GhosttySurface");
 
@@ -197,16 +202,10 @@ pub fn makeContextCurrent(self: *Self) void {
     }
 }
 
-/// Release the WGL context from the calling thread.
+/// Release the WGL context from the calling thread. WGL contexts are
+/// per-thread, so this serves both the main thread handing off to the
+/// renderer thread and the renderer thread exiting.
 pub fn releaseContext() void {
-    if (windows.wglMakeCurrent(null, null) == 0) {
-        log.warn("wglMakeCurrent(null) failed: err={d}", .{windows.GetLastError()});
-    }
-}
-
-/// Release context from the main thread before handing off to renderer thread.
-pub fn releaseMainThreadContext(self: *Self) void {
-    _ = self;
     if (windows.wglMakeCurrent(null, null) == 0) {
         log.warn("wglMakeCurrent(null) failed: err={d}", .{windows.GetLastError()});
     }
@@ -214,9 +213,15 @@ pub fn releaseMainThreadContext(self: *Self) void {
 
 // --- Interface methods required by CoreSurface ---
 
-pub fn getContentScale(_: *const Self) !apprt.ContentScale {
-    // TODO: query DPI from the monitor via GetDpiForWindow
-    return .{ .x = 1.0, .y = 1.0 };
+pub fn getContentScale(self: *const Self) !apprt.ContentScale {
+    // The app manifest declares PerMonitorV2 DPI awareness, so Windows does
+    // not scale us and we must report the real scale or everything renders
+    // at 96 DPI (tiny text on any display above 100%).
+    const hwnd = self.child_hwnd orelse return .{ .x = 1.0, .y = 1.0 };
+    const dpi = windows.GetDpiForWindow(hwnd);
+    if (dpi == 0) return .{ .x = 1.0, .y = 1.0 };
+    const scale: f32 = @as(f32, @floatFromInt(dpi)) / 96.0;
+    return .{ .x = scale, .y = scale };
 }
 
 pub fn getSize(self: *const Self) !apprt.SurfaceSize {
@@ -255,34 +260,28 @@ pub fn clipboardRequest(
     req: apprt.ClipboardRequest,
 ) !bool {
     const hwnd = self.child_hwnd orelse return false;
-    // Read from Windows clipboard
+    const core_sfc = self.core_surface orelse return false;
+    const alloc = self.rtApp().alloc;
+
     if (windows.OpenClipboard(hwnd) == 0) return false;
     defer _ = windows.CloseClipboard();
 
     const handle = windows.GetClipboardData(windows.CF_UNICODETEXT) orelse return false;
-    const raw_ptr: ?*anyopaque = windows.GlobalLock(handle);
-    if (raw_ptr == null) return false;
+    const raw_ptr = windows.GlobalLock(handle) orelse return false;
     defer _ = windows.GlobalUnlock(handle);
-    const ptr: [*]const u16 = @ptrCast(@alignCast(raw_ptr.?));
+    const utf16: [*:0]const u16 = @ptrCast(@alignCast(raw_ptr));
 
-    // Find length of null-terminated UTF-16 string
-    var wlen: usize = 0;
-    while (wlen < 65536 and ptr[wlen] != 0) : (wlen += 1) {}
+    // No fixed-size buffer: the clipboard has no size limit worth guessing at,
+    // and utf16LeToUtf8Alloc handles surrogate pairs (emoji) correctly.
+    const data = std.unicode.utf16LeToUtf8AllocZ(
+        alloc,
+        std.mem.sliceTo(utf16, 0),
+    ) catch |err| {
+        log.warn("clipboard paste decode failed: {}", .{err});
+        return false;
+    };
+    defer alloc.free(data);
 
-    // Convert UTF-16 to UTF-8 using page allocator
-    const alloc = std.heap.page_allocator;
-    var utf8_buf: std.ArrayList(u8) = .empty;
-    defer utf8_buf.deinit(alloc);
-    for (ptr[0..wlen]) |wc| {
-        var tmp: [4]u8 = undefined;
-        const n = std.unicode.utf8Encode(@intCast(wc), &tmp) catch continue;
-        utf8_buf.appendSlice(alloc, tmp[0..n]) catch return false;
-    }
-    utf8_buf.append(alloc, 0) catch return false;
-    const data: [:0]const u8 = utf8_buf.items[0 .. utf8_buf.items.len - 1 :0];
-
-    // Complete the request
-    const core_sfc = self.core_surface orelse return false;
     try core_sfc.completeClipboardRequest(req, data, false);
     return true;
 }
@@ -294,39 +293,40 @@ pub fn setClipboard(
     _: bool,
 ) !void {
     if (contents.len == 0) return;
-    const data = contents[0].data;
     const hwnd = self.child_hwnd orelse return;
+    const alloc = self.rtApp().alloc;
 
-    // Convert UTF-8 to UTF-16
-    var buf: [65536]u16 = undefined;
-    const len = std.unicode.utf8ToUtf16Le(&buf, data) catch return;
-    if (len >= buf.len) return;
-    buf[len] = 0;
+    const utf16 = std.unicode.utf8ToUtf16LeAllocZ(alloc, contents[0].data) catch |err| {
+        log.warn("clipboard copy encode failed: {}", .{err});
+        return;
+    };
+    defer alloc.free(utf16);
 
     if (windows.OpenClipboard(hwnd) == 0) return;
     defer _ = windows.CloseClipboard();
     _ = windows.EmptyClipboard();
 
-    const size = (len + 1) * @sizeOf(u16);
+    const size = (utf16.len + 1) * @sizeOf(u16);
     const hmem = windows.GlobalAlloc(windows.GMEM_MOVEABLE, size) orelse return;
     const dest: [*]u16 = @ptrCast(@alignCast(windows.GlobalLock(hmem) orelse {
         _ = windows.GlobalFree(hmem);
         return;
     }));
-    @memcpy(dest[0 .. len + 1], buf[0 .. len + 1]);
+    @memcpy(dest[0 .. utf16.len + 1], utf16[0 .. utf16.len + 1]);
     _ = windows.GlobalUnlock(hmem);
-    _ = windows.SetClipboardData(windows.CF_UNICODETEXT, hmem);
+
+    // Ownership of hmem transfers to the clipboard on success only.
+    if (windows.SetClipboardData(windows.CF_UNICODETEXT, hmem) == null) {
+        _ = windows.GlobalFree(hmem);
+    }
 }
 
 pub fn defaultTermioEnv(self: *Self) !std.process.EnvMap {
-    _ = self;
-    return internal_os.getEnvMap(std.heap.page_allocator) catch |err| {
+    return internal_os.getEnvMap(self.rtApp().alloc) catch |err| {
         log.err("failed to get environment: {}", .{err});
         return err;
     };
 }
-
-pub fn redrawInspector(_: *Self) void {}
 
 // -----------------------------------------------------------------------
 // Child Window Procedure - handles input for this surface
@@ -354,9 +354,16 @@ fn surfaceWndProc(
             return 0;
         },
         windows.WM_PAINT => {
+            // The GL renderer owns these pixels, so there is nothing to paint
+            // with GDI. We still must Begin/EndPaint to clear the update
+            // region, and we ask the core for a frame: the renderer is
+            // damage-driven, so without this an expose (uncovered window,
+            // restored from minimize, a neighbouring pane closing) leaves
+            // stale or black pixels until the terminal next changes.
             var ps: windows.PAINTSTRUCT = std.mem.zeroes(windows.PAINTSTRUCT);
             _ = windows.BeginPaint(hwnd, &ps);
             _ = windows.EndPaint(hwnd, &ps);
+            if (self.core_surface) |cs| cs.refreshCallback() catch {};
             return 0;
         },
         windows.WM_SETFOCUS => {
@@ -477,8 +484,110 @@ fn surfaceWndProc(
             // Already handled in WM_RBUTTONDOWN
             return 0;
         },
+        windows.WM_IME_STARTCOMPOSITION => {
+            self.composing = true;
+            self.imeUpdatePosition();
+            // Swallow this: the default handler would draw its own composition
+            // window on top of the terminal.
+            return 0;
+        },
+        windows.WM_IME_COMPOSITION => {
+            self.handleImeComposition(@truncate(@as(usize, @bitCast(lparam))));
+            return 0;
+        },
+        windows.WM_IME_ENDCOMPOSITION => {
+            self.composing = false;
+            if (self.core_surface) |cs| cs.preeditCallback(null) catch {};
+            return 0;
+        },
         else => return windows.DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+}
+
+/// Read a composition string (`GCS_COMPSTR` or `GCS_RESULTSTR`) as UTF-8 into
+/// `buf`. Returns null when empty or too long to fit.
+fn imeString(himc: windows.HIMC, index: windows.DWORD, buf: []u8) ?[]const u8 {
+    // A null buffer queries the required size, in bytes.
+    const bytes = windows.ImmGetCompositionStringW(himc, index, null, 0);
+    if (bytes <= 0) return null;
+
+    var utf16: [256]u16 = undefined;
+    const units = @as(usize, @intCast(bytes)) / @sizeOf(u16);
+    if (units == 0 or units > utf16.len) return null;
+
+    if (windows.ImmGetCompositionStringW(
+        himc,
+        index,
+        @ptrCast(&utf16),
+        @intCast(bytes),
+    ) <= 0) return null;
+
+    const len = std.unicode.utf16LeToUtf8(buf, utf16[0..units]) catch return null;
+    return buf[0..len];
+}
+
+fn handleImeComposition(self: *Self, flags: u32) void {
+    const hwnd = self.child_hwnd orelse return;
+    const cs = self.core_surface orelse return;
+    const himc = windows.ImmGetContext(hwnd) orelse return;
+    defer _ = windows.ImmReleaseContext(hwnd, himc);
+
+    // Worst case 3 UTF-8 bytes per UTF-16 unit of imeString's 256-unit buffer.
+    var buf: [256 * 3]u8 = undefined;
+
+    // Committed text first. Clear the preedit before delivering it so the
+    // composition doesn't briefly render alongside the committed result.
+    if (flags & windows.GCS_RESULTSTR != 0) {
+        if (imeString(himc, windows.GCS_RESULTSTR, &buf)) |text| {
+            cs.preeditCallback(null) catch {};
+            // A key event carrying only text: no key, no mods, not composing.
+            // This is how committed IME output reaches the terminal.
+            _ = cs.keyCallback(.{
+                .action = .press,
+                .key = .unidentified,
+                .mods = .{},
+                .consumed_mods = .{},
+                .composing = false,
+                .utf8 = text,
+                .unshifted_codepoint = 0,
+            }) catch |err| {
+                log.warn("IME commit failed: {}", .{err});
+            };
+        }
+    }
+
+    if (flags & windows.GCS_COMPSTR != 0) {
+        cs.preeditCallback(imeString(himc, windows.GCS_COMPSTR, &buf)) catch {};
+        self.imeUpdatePosition();
+    }
+}
+
+/// Park the IME composition and candidate windows at the terminal cursor.
+/// Without this they land in the window's top-left corner.
+fn imeUpdatePosition(self: *Self) void {
+    const hwnd = self.child_hwnd orelse return;
+    const cs = self.core_surface orelse return;
+    const himc = windows.ImmGetContext(hwnd) orelse return;
+    defer _ = windows.ImmReleaseContext(hwnd, himc);
+
+    // imePoint returns logical coordinates (it divides by the content scale),
+    // but Win32 wants physical client pixels, so scale it back up.
+    const pos = cs.imePoint();
+    const scale = self.getContentScale() catch .{ .x = 1, .y = 1 };
+    const pt: windows.POINT = .{
+        .x = @intFromFloat(pos.x * scale.x),
+        .y = @intFromFloat(pos.y * scale.y),
+    };
+
+    _ = windows.ImmSetCompositionWindow(himc, &.{
+        .dwStyle = windows.CFS_POINT,
+        .ptCurrentPos = pt,
+    });
+    _ = windows.ImmSetCandidateWindow(himc, &.{
+        .dwIndex = 0,
+        .dwStyle = windows.CFS_CANDIDATEPOS,
+        .ptCurrentPos = pt,
+    });
 }
 
 fn getSelf(hwnd: windows.HWND) ?*Self {
@@ -498,11 +607,13 @@ fn handleKeyEvent(self: *Self, action: input.Action, wparam: windows.WPARAM, lpa
     // Get modifier state
     const mods = App.getModifiers();
 
-    // Get text from pending WM_CHAR messages (only for press/repeat)
+    // Get text from pending WM_CHAR messages (only for press/repeat).
+    // While an IME composition is active there is no WM_CHAR to consume: the
+    // text arrives through WM_IME_COMPOSITION instead.
     var utf8_buf: [4]u8 = undefined;
     var utf8_len: u3 = 0;
     var consumed_mods: input.Mods = .{};
-    if (action != .release) {
+    if (action != .release and !self.composing) {
         var char_msg: windows.MSG = undefined;
         if (windows.PeekMessageW(&char_msg, child, windows.WM_CHAR, windows.WM_CHAR, windows.PM_REMOVE) != 0) {
             const codepoint: u21 = @intCast(char_msg.wParam);
@@ -536,7 +647,7 @@ fn handleKeyEvent(self: *Self, action: input.Action, wparam: windows.WPARAM, lpa
         .key = key,
         .mods = mods,
         .consumed_mods = consumed_mods,
-        .composing = false,
+        .composing = self.composing,
         .utf8 = utf8_buf[0..utf8_len],
         .unshifted_codepoint = unshifted_codepoint,
     }) catch |err| {

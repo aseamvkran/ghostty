@@ -15,7 +15,8 @@ const CoreSurface = @import("../../Surface.zig");
 const Surface = @import("Surface.zig");
 const Tab = @import("Tab.zig");
 const renderer = @import("../../renderer.zig");
-const windows = @import("../../os/main.zig").win32;
+const internal_os = @import("../../os/main.zig");
+const windows = internal_os.win32;
 
 const log = std.log.scoped(.win32);
 
@@ -126,6 +127,10 @@ pre_fullscreen_rect: windows.RECT = .{},
 /// Float-on-top state.
 is_float_on_top: bool = false,
 
+/// Split divider currently being drag-resized, if any. Points into the active
+/// tab's split tree, and is cleared on mouse-up.
+drag_divider: ?*Tab.SplitNode = null,
+
 pub fn init(
     self: *App,
     core_app: *CoreApp,
@@ -158,13 +163,35 @@ pub fn init(
 
     // Create fonts
     self.tab_font = windows.CreateFontW(
-        -14, 0, 0, 0, windows.FW_NORMAL, 0, 0, 0,
-        windows.DEFAULT_CHARSET, 0, 0, 0, 0,
+        -14,
+        0,
+        0,
+        0,
+        windows.FW_NORMAL,
+        0,
+        0,
+        0,
+        windows.DEFAULT_CHARSET,
+        0,
+        0,
+        0,
+        0,
         std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI"),
     );
     self.search_font = windows.CreateFontW(
-        -16, 0, 0, 0, windows.FW_NORMAL, 0, 0, 0,
-        windows.DEFAULT_CHARSET, 0, 0, 0, 0,
+        -16,
+        0,
+        0,
+        0,
+        windows.FW_NORMAL,
+        0,
+        0,
+        0,
+        windows.DEFAULT_CHARSET,
+        0,
+        0,
+        0,
+        0,
         std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI"),
     );
 
@@ -211,31 +238,41 @@ pub fn run(self: *App) !void {
         // directly, bypassing the parent wndProc, so we must handle
         // Escape and Enter here in the message loop.
         if (self.search_active and self.search_hwnd != null and
-            msg.hwnd == self.search_hwnd.? and msg.message == windows.WM_KEYDOWN)
+            msg.hwnd == self.search_hwnd.? and msg.message == windows.WM_KEYDOWN and
+            self.handleSearchKey(msg.wParam))
         {
-            if (msg.wParam == @as(usize, @intCast(windows.VK_ESCAPE))) {
-                if (self.getFocusedCoreSurface()) |core| {
-                    _ = core.performBindingAction(.end_search) catch {};
-                }
-                self.hideSearch();
-                continue;
-            }
-            if (msg.wParam == @as(usize, @intCast(windows.VK_RETURN))) {
-                if (self.getFocusedCoreSurface()) |core| {
-                    const mods = getModifiers();
-                    if (mods.shift) {
-                        _ = core.performBindingAction(.{ .navigate_search = .previous }) catch {};
-                    } else {
-                        _ = core.performBindingAction(.{ .navigate_search = .next }) catch {};
-                    }
-                }
-                continue;
-            }
+            continue;
         }
 
         _ = windows.TranslateMessage(&msg);
         _ = windows.DispatchMessageW(&msg);
     }
+}
+
+/// Handle Escape/Enter while the search bar is open. Returns true if the key
+/// was consumed. Reached from both the message loop (for keys delivered
+/// straight to the search EDIT child) and wndProc.
+fn handleSearchKey(self: *App, wparam: windows.WPARAM) bool {
+    if (!self.search_active) return false;
+
+    if (wparam == @as(usize, @intCast(windows.VK_ESCAPE))) {
+        if (self.getFocusedCoreSurface()) |core| {
+            _ = core.performBindingAction(.end_search) catch {};
+        }
+        self.hideSearch();
+        return true;
+    }
+
+    if (wparam == @as(usize, @intCast(windows.VK_RETURN))) {
+        if (self.getFocusedCoreSurface()) |core| {
+            const dir: input.Binding.Action.NavigateSearch =
+                if (getModifiers().shift) .previous else .next;
+            _ = core.performBindingAction(.{ .navigate_search = dir }) catch {};
+        }
+        return true;
+    }
+
+    return false;
 }
 
 pub fn terminate(self: *App) void {
@@ -344,23 +381,9 @@ pub fn performAction(
             return false;
         },
         .equalize_splits => {
-            if (self.tabs.items.len > self.active_tab) {
-                var tab = &self.tabs.items[self.active_tab];
-                tab.equalize();
-                const hwnd = self.hwnd orelse return false;
-                var client_rect: windows.RECT = undefined;
-                if (windows.GetClientRect(hwnd, &client_rect) == 0) return false;
-                var content_top: i32 = 0;
-                if (self.tabs.items.len > 1) content_top = TAB_BAR_HEIGHT;
-                if (self.search_active) content_top += SEARCH_BAR_HEIGHT;
-                const content_rect: windows.RECT = .{
-                    .left = client_rect.left,
-                    .top = content_top,
-                    .right = client_rect.right,
-                    .bottom = client_rect.bottom,
-                };
-                tab.layout(content_rect);
-            }
+            if (self.tabs.items.len <= self.active_tab) return false;
+            self.tabs.items[self.active_tab].equalize();
+            self.updateLayout();
             return true;
         },
         .float_window => {
@@ -385,14 +408,13 @@ pub fn performAction(
         },
         .set_title => {
             _ = target;
-            if (self.hwnd) |hwnd| {
-                const title_slice = value.title;
-                var buf: [256]u16 = undefined;
-                const len = std.unicode.utf8ToUtf16Le(&buf, title_slice) catch 0;
-                if (len < buf.len) {
-                    buf[len] = 0;
-                    _ = windows.SetWindowTextW(hwnd, @ptrCast(&buf));
-                }
+            const hwnd = self.hwnd orelse return true;
+            // Titles come straight from terminal output (OSC 0/2) and are
+            // unbounded, so this must not use a fixed buffer without a
+            // length check — see windows.utf16Z.
+            var buf: [512]u16 = undefined;
+            if (windows.utf16Z(&buf, value.title)) |title| {
+                _ = windows.SetWindowTextW(hwnd, title.ptr);
             }
             return true;
         },
@@ -425,9 +447,9 @@ pub fn performIpc(
     return false;
 }
 
-pub fn redrawInspector(_: *App, surface: *Surface) void {
-    surface.redrawInspector();
-}
+/// Required by the apprt interface. The inspector isn't implemented on Win32
+/// yet, and `.render_inspector` reports unsupported, so there's nothing to do.
+pub fn redrawInspector(_: *App, _: *Surface) void {}
 
 // -----------------------------------------------------------------------
 // Tab Management
@@ -437,9 +459,8 @@ fn createNewTab(self: *App) !void {
     const surface = try self.createSurface();
     errdefer self.destroySurface(surface);
 
-    var tab = try Tab.init(self.alloc, surface);
+    const tab = try Tab.init(self.alloc, surface);
     try self.tabs.append(self.alloc, tab);
-    _ = &tab;
 
     self.active_tab = self.tabs.items.len - 1;
     self.updateLayout();
@@ -483,6 +504,7 @@ fn closeTab(self: *App, mode: apprt.action.CloseTabMode) !void {
 
 fn closeTabAt(self: *App, idx: usize) void {
     if (idx >= self.tabs.items.len) return;
+    self.cancelDividerDrag();
 
     var tab = &self.tabs.items[idx];
     // Destroy all surfaces in this tab
@@ -508,6 +530,10 @@ fn closeTabAt(self: *App, idx: usize) void {
 /// If it was the last surface in the tab, closes the tab.
 /// If it was the last tab, quits the application.
 pub fn closeSurface(self: *App, surface: *Surface) void {
+    // A shell can exit mid-drag (this arrives as a posted message), and
+    // collapsing the tree frees split nodes that drag_divider may point at.
+    self.cancelDividerDrag();
+
     // Find which tab contains this surface
     for (self.tabs.items, 0..) |*tab, tab_idx| {
         if (tabContainsSurface(tab.root, surface)) {
@@ -531,13 +557,9 @@ pub fn closeSurface(self: *App, surface: *Surface) void {
 
             self.updateLayout();
             self.updateTabVisibility();
+            // invalidateTabBar now invalidates the whole client area, which
+            // also clears the region the destroyed surface used to occupy.
             self.invalidateTabBar();
-
-            // Force repaint of the entire client area so stale content
-            // from the destroyed surface's region is cleared.
-            if (self.hwnd) |h| {
-                _ = windows.InvalidateRect(h, null, 1);
-            }
 
             // Focus the remaining surface
             if (self.tabs.items.len > self.active_tab) {
@@ -576,6 +598,11 @@ fn destroySurfacesInNode(self: *App, node: *Tab.SplitNode) void {
 }
 
 fn gotoTab(self: *App, target: apprt.action.GotoTab) void {
+    // Every branch below indexes off items.len, so an empty list underflows.
+    // We can be tab-less briefly: closeTabAt posts WM_QUIT but messages
+    // already in the queue still get dispatched before the loop exits.
+    if (self.tabs.items.len == 0) return;
+
     const new_idx: usize = switch (target) {
         .previous => if (self.active_tab > 0) self.active_tab - 1 else self.tabs.items.len - 1,
         .next => if (self.active_tab + 1 < self.tabs.items.len) self.active_tab + 1 else 0,
@@ -706,10 +733,8 @@ fn showSearch(self: *App, needle: [:0]const u8) void {
         // Set needle text if provided
         if (needle.len > 0) {
             var buf: [256]u16 = undefined;
-            const len = std.unicode.utf8ToUtf16Le(&buf, needle) catch 0;
-            if (len < buf.len) {
-                buf[len] = 0;
-                _ = windows.SendMessageW(search, windows.WM_SETTEXT, 0, @bitCast(@intFromPtr(@as([*:0]const u16, @ptrCast(&buf)))));
+            if (windows.utf16Z(&buf, needle)) |text| {
+                _ = windows.SendMessageW(search, windows.WM_SETTEXT, 0, @bitCast(@intFromPtr(text.ptr)));
                 // Select all text
                 _ = windows.SendMessageW(search, windows.EM_SETSEL, 0, -1);
             }
@@ -794,41 +819,33 @@ fn createSearchBar(self: *App) void {
 fn handleSearchInput(self: *App) void {
     const search = self.search_hwnd orelse return;
     if (!self.search_active) return;
+    const core = self.getFocusedCoreSurface() orelse return;
 
-    // Get text from the EDIT control
-    var buf: [256]u16 = undefined;
-    const len: usize = @intCast(windows.SendMessageW(search, windows.WM_GETTEXT, buf.len, @bitCast(@intFromPtr(@as([*]u16, &buf)))));
-    if (len == 0) {
-        // Empty search - clear
-        if (self.tabs.items.len > self.active_tab) {
-            const tab = &self.tabs.items[self.active_tab];
-            if (tab.focused.core_surface) |core| {
-                _ = core.performBindingAction(.{ .search = "" }) catch {};
-            }
-        }
-        return;
-    }
+    // Get text from the EDIT control. WM_GETTEXT's wParam counts the null.
+    const max_needle = 256;
+    var buf: [max_needle]u16 = undefined;
+    const len: usize = @intCast(windows.SendMessageW(
+        search,
+        windows.WM_GETTEXT,
+        buf.len,
+        @bitCast(@intFromPtr(@as([*]u16, &buf))),
+    ));
+    if (len > buf.len) return;
 
-    // Convert UTF-16 to UTF-8
-    var utf8_buf: [1024]u8 = undefined;
-    var utf8_len: usize = 0;
-    for (buf[0..len]) |wc| {
-        var tmp: [4]u8 = undefined;
-        const n = std.unicode.utf8Encode(@intCast(wc), &tmp) catch continue;
-        if (utf8_len + n > utf8_buf.len - 1) break;
-        @memcpy(utf8_buf[utf8_len..][0..n], tmp[0..n]);
-        utf8_len += n;
-    }
+    // utf16LeToUtf8 handles surrogate pairs, so a needle containing an emoji
+    // isn't silently mangled. Worst case is 3 bytes per UTF-16 unit.
+    var utf8_buf: [max_needle * 3 + 1]u8 = undefined;
+    const utf8_len = std.unicode.utf16LeToUtf8(&utf8_buf, buf[0..len]) catch return;
     utf8_buf[utf8_len] = 0;
-    const needle: [:0]const u8 = utf8_buf[0..utf8_len :0];
 
-    // Send to focused surface
-    if (self.tabs.items.len > self.active_tab) {
-        const tab = &self.tabs.items[self.active_tab];
-        if (tab.focused.core_surface) |core| {
-            _ = core.performBindingAction(.{ .search = needle }) catch {};
-        }
-    }
+    _ = core.performBindingAction(.{ .search = utf8_buf[0..utf8_len :0] }) catch {};
+}
+
+/// Format the "selected/total" search counter. Exposed for testing.
+pub fn formatSearchCount(buf: []u8, total: ?usize, selected: ?usize) []const u8 {
+    const t = total orelse return "";
+    const s = selected orelse return std.fmt.bufPrint(buf, "0/{d}", .{t}) catch "";
+    return std.fmt.bufPrint(buf, "{d}/{d}", .{ s + 1, t }) catch "";
 }
 
 fn updateSearchCount(self: *App) void {
@@ -836,19 +853,11 @@ fn updateSearchCount(self: *App) void {
     if (!self.search_active) return;
 
     var text_buf: [32]u8 = undefined;
-    const text = if (self.search_total) |total|
-        if (self.search_selected) |sel|
-            std.fmt.bufPrint(&text_buf, "{d}/{d}", .{ sel + 1, total }) catch ""
-        else
-            std.fmt.bufPrint(&text_buf, "0/{d}", .{total}) catch ""
-    else
-        "";
+    const text = formatSearchCount(&text_buf, self.search_total, self.search_selected);
 
     var utf16_buf: [64]u16 = undefined;
-    const utf16_len = std.unicode.utf8ToUtf16Le(&utf16_buf, text) catch 0;
-    if (utf16_len < utf16_buf.len) {
-        utf16_buf[utf16_len] = 0;
-        _ = windows.SendMessageW(label, windows.WM_SETTEXT, 0, @bitCast(@intFromPtr(@as([*:0]const u16, @ptrCast(&utf16_buf)))));
+    if (windows.utf16Z(&utf16_buf, text)) |utf16| {
+        _ = windows.SendMessageW(label, windows.WM_SETTEXT, 0, @bitCast(@intFromPtr(utf16.ptr)));
     }
 }
 
@@ -961,7 +970,11 @@ pub fn showContextMenu(self: *App, x: i32, y: i32) void {
     const cmd = windows.TrackPopupMenu(
         menu,
         windows.TPM_LEFTALIGN | windows.TPM_TOPALIGN | windows.TPM_RETURNCMD,
-        x, y, 0, hwnd, null,
+        x,
+        y,
+        0,
+        hwnd,
+        null,
     );
 
     if (cmd != 0) {
@@ -1143,40 +1156,50 @@ fn updateLayout(self: *App) void {
 fn updateTabVisibility(self: *App) void {
     // Show surfaces in the active tab, hide others
     for (self.tabs.items, 0..) |*tab, i| {
-        const visible = (i == self.active_tab);
-        self.setTabVisibility(tab, visible);
+        setNodeVisibility(tab.root, i == self.active_tab);
     }
 }
 
-fn setTabVisibility(self: *App, tab: *Tab, visible: bool) void {
-    self.setNodeVisibility(tab.root, visible);
-}
-
-fn setNodeVisibility(_: *App, node: *Tab.SplitNode, visible: bool) void {
+fn setNodeVisibility(node: *Tab.SplitNode, visible: bool) void {
     switch (node.*) {
         .leaf => |surface| {
             if (surface.child_hwnd) |child| {
-                _ = windows.ShowWindow(child, if (visible) windows.SW_SHOWNORMAL else 0);
+                _ = windows.ShowWindow(child, if (visible) windows.SW_SHOWNORMAL else windows.SW_HIDE);
             }
         },
         .split => |s| {
-            setNodeVisibility(undefined, s.first, visible);
-            setNodeVisibility(undefined, s.second, visible);
+            setNodeVisibility(s.first, visible);
+            setNodeVisibility(s.second, visible);
         },
     }
 }
 
 fn invalidateTabBar(self: *App) void {
-    if (self.hwnd) |hwnd| {
-        var rect: windows.RECT = .{
-            .left = 0,
-            .top = 0,
-            .right = 2000,
-            .bottom = TAB_BAR_HEIGHT,
-        };
-        _ = windows.InvalidateRect(hwnd, &rect, 1);
-        _ = &rect;
-    }
+    // Invalidate the whole client area rather than a guessed rect: the old
+    // hardcoded 2000px right edge left the tab bar unpainted on wider
+    // displays. WS_CLIPCHILDREN keeps this from touching surface children.
+    if (self.hwnd) |hwnd| _ = windows.InvalidateRect(hwnd, null, 1);
+}
+
+/// Width of one tab in the tab bar. Never zero: handleTabBarClick divides
+/// by this, and a narrow window with many tabs can round down to 0.
+fn tabWidth(self: *App, client_width: i32) i32 {
+    const count: i32 = @intCast(self.tabs.items.len);
+    return @max(1, @min(200, @divTrunc(client_width, count)));
+}
+
+fn cancelDividerDrag(self: *App) void {
+    if (self.drag_divider == null) return;
+    self.drag_divider = null;
+    _ = windows.ReleaseCapture();
+}
+
+/// The split divider under (x, y) in the active tab, if any. Dividers are the
+/// gaps between surface child windows, so the parent gets these mouse events.
+fn dividerAt(self: *App, x: i32, y: i32) ?*Tab.SplitNode {
+    if (self.drag_divider) |node| return node;
+    if (self.tabs.items.len <= self.active_tab) return null;
+    return self.tabs.items[self.active_tab].dividerAt(x, y);
 }
 
 // -----------------------------------------------------------------------
@@ -1214,7 +1237,7 @@ fn drawTabBar(self: *App, hdc: windows.HDC) void {
     _ = windows.SetBkMode(hdc, windows.TRANSPARENT);
 
     // Draw each tab
-    const tab_width: i32 = @min(200, @divTrunc(client_rect.right, @as(i32, @intCast(self.tabs.items.len))));
+    const tab_width = self.tabWidth(client_rect.right);
     for (self.tabs.items, 0..) |_, i| {
         const x: i32 = @as(i32, @intCast(i)) * tab_width;
         const is_active = (i == self.active_tab);
@@ -1233,45 +1256,23 @@ fn drawTabBar(self: *App, hdc: windows.HDC) void {
 
         // Tab title
         _ = windows.SetTextColor(hdc, if (is_active) 0x00FFFFFF else 0x00AAAAAA);
-        var title_buf: [32]u16 = undefined;
-        const title_text = std.fmt.bufPrint(
-            std.mem.asBytes(&title_buf),
-            "Tab {d}",
-            .{i + 1},
-        ) catch "Tab";
-        _ = title_text;
-
-        // Use a simple number label
-        var num_buf: [16]u16 = undefined;
-        const idx_val = i + 1;
-        const digit_count: usize = if (idx_val < 10) 1 else if (idx_val < 100) 2 else 3;
-        var temp_val = idx_val;
-        var d: usize = digit_count;
-        while (d > 0) {
-            d -= 1;
-            num_buf[d] = @intCast('0' + (temp_val % 10));
-            temp_val /= 10;
-        }
-        // Prefix with "Tab "
-        const prefix = std.unicode.utf8ToUtf16LeStringLiteral("Tab ");
-        var full_buf: [20]u16 = undefined;
-        @memcpy(full_buf[0..4], prefix[0..4]);
-        @memcpy(full_buf[4..][0..digit_count], num_buf[0..digit_count]);
-        const text_len: i32 = @intCast(4 + digit_count);
-
-        _ = windows.TextOutW(hdc, x + 10, 7, &full_buf, text_len);
+        var label_buf: [16]u8 = undefined;
+        const label = std.fmt.bufPrint(&label_buf, "Tab {d}", .{i + 1}) catch "Tab";
+        var utf16_buf: [16]u16 = undefined;
+        const utf16 = windows.utf16Z(&utf16_buf, label) orelse continue;
+        _ = windows.TextOutW(hdc, x + 10, 7, utf16.ptr, @intCast(utf16.len));
     }
 }
 
 fn handleTabBarClick(self: *App, x: i32) void {
     if (self.tabs.items.len <= 1) return;
+    if (x < 0) return;
 
     const hwnd = self.hwnd orelse return;
     var client_rect: windows.RECT = undefined;
     if (windows.GetClientRect(hwnd, &client_rect) == 0) return;
 
-    const tab_width: i32 = @min(200, @divTrunc(client_rect.right, @as(i32, @intCast(self.tabs.items.len))));
-    const clicked_tab: usize = @intCast(@divTrunc(x, tab_width));
+    const clicked_tab: usize = @intCast(@divTrunc(x, self.tabWidth(client_rect.right)));
 
     if (clicked_tab < self.tabs.items.len and clicked_tab != self.active_tab) {
         self.active_tab = clicked_tab;
@@ -1365,53 +1366,45 @@ fn toggleFloat(self: *App) void {
     _ = windows.SetWindowPos(
         hwnd,
         if (self.is_float_on_top) windows.HWND_TOPMOST else windows.HWND_NOTOPMOST,
-        0, 0, 0, 0,
+        0,
+        0,
+        0,
+        0,
         windows.SWP_NOMOVE | windows.SWP_NOSIZE,
     );
 }
 
 fn openConfig(self: *App) void {
-    _ = self;
-    // Open the config file in the default editor
-    const config_path = std.process.getEnvVarOwned(
-        std.heap.page_allocator,
-        "LOCALAPPDATA",
-    ) catch return;
-    defer std.heap.page_allocator.free(config_path);
+    // configpkg.edit.openPath resolves the same path Config.load reads from
+    // and creates it if missing; internal_os.open already knows how to hand a
+    // path to the system default handler on Windows.
+    const path = configpkg.edit.openPath(self.alloc) catch |err| {
+        log.err("failed to resolve config path: {}", .{err});
+        return;
+    };
+    defer self.alloc.free(path);
 
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const full_path = std.fmt.bufPrintZ(
-        &path_buf,
-        "{s}\\ghostty\\config.ghostty",
-        .{config_path},
-    ) catch return;
-
-    // Use ShellExecute via std to open the config file
-    var buf16: [512]u16 = undefined;
-    const len = std.unicode.utf8ToUtf16Le(&buf16, full_path) catch return;
-    if (len >= buf16.len) return;
-    buf16[len] = 0;
-
-    _ = ShellExecuteW(null, std.unicode.utf8ToUtf16LeStringLiteral("open"), @ptrCast(&buf16), null, null, windows.SW_SHOWNORMAL);
+    internal_os.open(self.alloc, .text, path) catch |err| {
+        log.err("failed to open config: {}", .{err});
+    };
 }
-
-extern "shell32" fn ShellExecuteW(
-    hwnd: ?windows.HWND,
-    lpOperation: ?[*:0]const u16,
-    lpFile: [*:0]const u16,
-    lpParameters: ?[*:0]const u16,
-    lpDirectory: ?[*:0]const u16,
-    nShowCmd: windows.INT,
-) callconv(windows.WINAPI) isize;
 
 fn reloadConfig(self: *App) void {
     var config = Config.load(self.alloc) catch |err| {
         log.err("failed to reload config: {}", .{err});
         return;
     };
+    errdefer config.deinit();
+
+    // Push it to every live surface. Without this the reload only swapped the
+    // App's copy and nothing on screen changed.
+    self.core_app.updateConfig(self, &config) catch |err| {
+        log.err("failed to apply reloaded config: {}", .{err});
+        return;
+    };
+
     self.config.deinit();
     self.config.* = config;
-    _ = &config;
     log.info("configuration reloaded", .{});
 }
 
@@ -1465,25 +1458,17 @@ fn collectLeaves(node: *Tab.SplitNode, buf: *[64]*Surface, count: *usize) void {
 
 fn showAbout(_: *App) void {
     @setEvalBranchQuota(10000);
-    _ = MessageBoxW(
+    _ = windows.MessageBoxW(
         null,
         std.unicode.utf8ToUtf16LeStringLiteral(
             "Ghostty Terminal Emulator\n\n" ++
                 "A fast, native, feature-rich terminal emulator.\n\n" ++
-                "Win32 port authored by Claude Opus 4.6 via GitHub Copilot.\n\n" ++
                 "https://ghostty.org",
         ),
         std.unicode.utf8ToUtf16LeStringLiteral("About Ghostty"),
         0, // MB_OK
     );
 }
-
-extern "user32" fn MessageBoxW(
-    hWnd: ?windows.HWND,
-    lpText: [*:0]const u16,
-    lpCaption: [*:0]const u16,
-    uType: windows.UINT,
-) callconv(windows.WINAPI) windows.INT;
 
 // -----------------------------------------------------------------------
 // Window Creation
@@ -1506,7 +1491,10 @@ fn createWindow(self: *App) !void {
         .hInstance = hinstance,
         .hIcon = icon,
         .hCursor = windows.LoadCursorW(null, windows.IDC_ARROW),
-        .hbrBackground = null,
+        // With a null brush nothing erases the background, so a region a
+        // closed pane used to occupy keeps its stale pixels until something
+        // else paints over it.
+        .hbrBackground = windows.CreateSolidBrush(0x00000000),
         .lpszMenuName = null,
         .lpszClassName = class_name,
         .hIconSm = icon_sm,
@@ -1591,6 +1579,32 @@ fn wndProc(
             }
             return 0;
         },
+        windows.WM_DPICHANGED => {
+            // We declare PerMonitorV2 awareness in the manifest, so Windows
+            // hands us a suggested rect and expects us to resize ourselves
+            // and re-render at the new scale.
+            if (getApp(hwnd)) |app| {
+                const suggested: *const windows.RECT = @ptrFromInt(@as(usize, @bitCast(lparam)));
+                _ = windows.SetWindowPos(
+                    hwnd,
+                    null,
+                    suggested.left,
+                    suggested.top,
+                    suggested.right - suggested.left,
+                    suggested.bottom - suggested.top,
+                    windows.SWP_NOZORDER,
+                );
+                for (app.surfaces.items) |surface| {
+                    const cs = surface.core_surface orelse continue;
+                    const scale = surface.getContentScale() catch continue;
+                    cs.contentScaleCallback(scale) catch |err| {
+                        log.warn("content scale callback failed: {}", .{err});
+                    };
+                }
+                app.updateLayout();
+            }
+            return 0;
+        },
         windows.WM_PAINT => {
             if (getApp(hwnd)) |app| {
                 var ps: windows.PAINTSTRUCT = std.mem.zeroes(windows.PAINTSTRUCT);
@@ -1637,6 +1651,13 @@ fn wndProc(
                     app.handleTabBarClick(x);
                     return 0;
                 }
+                // Grab a split divider to resize it. Capture the mouse so the
+                // drag keeps tracking once the cursor leaves the thin gap.
+                if (app.dividerAt(x, y)) |node| {
+                    app.drag_divider = node;
+                    _ = windows.SetCapture(hwnd);
+                    return 0;
+                }
                 // Click below the tab bar — ensure the active surface
                 // gets focus so keyboard input works after alt-tab.
                 if (app.tabs.items.len > app.active_tab) {
@@ -1648,30 +1669,60 @@ fn wndProc(
             }
             return 0;
         },
+        windows.WM_MOUSEMOVE => {
+            if (getApp(hwnd)) |app| {
+                if (app.drag_divider) |node| {
+                    Tab.moveDivider(
+                        node,
+                        windows.GET_X_LPARAM(lparam),
+                        windows.GET_Y_LPARAM(lparam),
+                    );
+                    app.updateLayout();
+                    return 0;
+                }
+            }
+            return windows.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+        windows.WM_LBUTTONUP => {
+            if (getApp(hwnd)) |app| {
+                if (app.drag_divider != null) {
+                    app.drag_divider = null;
+                    _ = windows.ReleaseCapture();
+                    return 0;
+                }
+            }
+            return windows.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+        windows.WM_SETCURSOR => {
+            // Show a resize cursor over a divider. This has to be WM_SETCURSOR
+            // rather than a SetCursor in WM_MOUSEMOVE, or the class cursor gets
+            // restored on the very next mouse message.
+            if (windows.LOWORD(lparam) == windows.HTCLIENT) {
+                if (getApp(hwnd)) |app| {
+                    var pt: windows.POINT = .{};
+                    if (windows.GetCursorPos(&pt) != 0 and
+                        windows.ScreenToClient(hwnd, &pt) != 0)
+                    {
+                        if (app.dividerAt(pt.x, pt.y)) |node| {
+                            _ = windows.SetCursor(windows.LoadCursorW(
+                                null,
+                                switch (node.split.direction) {
+                                    .horizontal => windows.IDC_SIZEWE,
+                                    .vertical => windows.IDC_SIZENS,
+                                },
+                            ));
+                            return 1;
+                        }
+                    }
+                }
+            }
+            return windows.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
         windows.WM_KEYDOWN,
         windows.WM_SYSKEYDOWN,
         => {
             if (getApp(hwnd)) |app| {
-                // Handle Escape to close search
-                if (app.search_active and wparam == @as(usize, @intCast(windows.VK_ESCAPE))) {
-                    if (app.getFocusedCoreSurface()) |core| {
-                        _ = core.performBindingAction(.end_search) catch {};
-                    }
-                    app.hideSearch();
-                    return 0;
-                }
-                // Handle Enter in search for navigate next
-                if (app.search_active and wparam == @as(usize, @intCast(windows.VK_RETURN))) {
-                    if (app.getFocusedCoreSurface()) |core| {
-                        const mods = getModifiers();
-                        if (mods.shift) {
-                            _ = core.performBindingAction(.{ .navigate_search = .previous }) catch {};
-                        } else {
-                            _ = core.performBindingAction(.{ .navigate_search = .next }) catch {};
-                        }
-                    }
-                    return 0;
-                }
+                if (app.handleSearchKey(wparam)) return 0;
             }
             // Let DefWindowProc handle if not consumed
             return windows.DefWindowProcW(hwnd, msg, wparam, lparam);

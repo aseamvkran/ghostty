@@ -414,9 +414,9 @@ fn drainMailbox(self: *Thread) !void {
             },
 
             .resize => |v| {
-                // On Win32 (and other apprts without automatic viewport management),
-                // we need to explicitly update the OpenGL viewport when the window resizes.
-                if (comptime @hasDecl(apprt.runtime.Surface, "swapBuffers")) {
+                // Win32 has no toolkit managing the GL context, so the
+                // viewport is ours to update.
+                if (comptime apprt.runtime == apprt.win32) {
                     const gl = @import("opengl");
                     gl.viewport(
                         0,
@@ -503,7 +503,7 @@ fn drawFrame(self: *Thread, now: bool) void {
 
         // On Win32, we need to explicitly swap buffers after rendering
         // since there's no toolkit managing the GL context for us.
-        if (comptime @hasDecl(apprt.runtime.Surface, "swapBuffers")) {
+        if (comptime apprt.runtime == apprt.win32) {
             self.surface.swapBuffers();
         }
     }
