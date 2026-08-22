@@ -3,7 +3,10 @@
 const std = @import("std");
 
 // Re-export common types from std
-pub const BOOL = std.os.windows.BOOL;
+/// Win32 BOOL is a plain 32-bit int. std.os.windows.BOOL is a distinct typed
+/// Bool(c_int) which would force a conversion at every `!= 0` call-site check,
+/// so declare the ABI type directly.
+pub const BOOL = i32;
 pub const DWORD = std.os.windows.DWORD;
 pub const HANDLE = std.os.windows.HANDLE;
 pub const HINSTANCE = std.os.windows.HINSTANCE;
@@ -97,9 +100,12 @@ pub const PFD_TYPE_RGBA: BYTE = 0;
 pub const PFD_MAIN_PLANE: BYTE = 0;
 
 // System cursor IDs
-pub const IDC_ARROW: [*:0]const u16 = @ptrFromInt(32512);
-pub const IDC_SIZENS: [*:0]const u16 = @ptrFromInt(32645);
-pub const IDC_SIZEWE: [*:0]const u16 = @ptrFromInt(32644);
+/// MAKEINTRESOURCE values: small integers passed in a pointer slot, not real
+/// addresses, so they carry no alignment guarantee.
+pub const CursorId = [*:0]align(1) const u16;
+pub const IDC_ARROW: CursorId = @ptrFromInt(32512);
+pub const IDC_SIZENS: CursorId = @ptrFromInt(32645);
+pub const IDC_SIZEWE: CursorId = @ptrFromInt(32644);
 
 // WM_SETCURSOR hit-test codes (low word of lParam)
 pub const HTCLIENT: u16 = 1;
@@ -246,7 +252,7 @@ pub extern "user32" fn DispatchMessageW(lpMsg: *const MSG) callconv(WINAPI) BOOL
 pub extern "user32" fn DefWindowProcW(hWnd: HWND, Msg: UINT, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT;
 pub extern "user32" fn PostQuitMessage(nExitCode: INT) callconv(WINAPI) void;
 pub extern "user32" fn PostMessageW(hWnd: HWND, Msg: UINT, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) BOOL;
-pub extern "user32" fn LoadCursorW(hInstance: ?HMODULE, lpCursorName: [*:0]const u16) callconv(WINAPI) ?HCURSOR;
+pub extern "user32" fn LoadCursorW(hInstance: ?HMODULE, lpCursorName: CursorId) callconv(WINAPI) ?HCURSOR;
 pub extern "user32" fn BeginPaint(hWnd: HWND, lpPaint: *PAINTSTRUCT) callconv(WINAPI) ?HDC;
 pub extern "user32" fn EndPaint(hWnd: HWND, lpPaint: *const PAINTSTRUCT) callconv(WINAPI) BOOL;
 pub extern "user32" fn SetWindowLongPtrW(hWnd: HWND, nIndex: INT, dwNewLong: isize) callconv(WINAPI) isize;

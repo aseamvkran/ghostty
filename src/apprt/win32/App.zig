@@ -140,11 +140,8 @@ pub fn init(
 
     const alloc = core_app.alloc;
 
-    // Set working directory to user's home if not already configured
-    if (std.process.getEnvVarOwned(alloc, "USERPROFILE")) |home| {
-        defer alloc.free(home);
-        std.posix.chdir(home) catch {};
-    } else |_| {}
+    // No chdir here: Config.finalize already defaults working-directory to
+    // .home when we weren't launched from a CLI, and resolves it per surface.
 
     // Load configuration
     var config = try Config.load(alloc);
@@ -1384,7 +1381,7 @@ fn openConfig(self: *App) void {
     };
     defer self.alloc.free(path);
 
-    internal_os.open(self.alloc, .text, path) catch |err| {
+    internal_os.open(.text, path) catch |err| {
         log.err("failed to open config: {}", .{err});
     };
 }

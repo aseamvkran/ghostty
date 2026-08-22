@@ -10,6 +10,7 @@ const apprt = @import("../../apprt.zig");
 const configpkg = @import("../../config.zig");
 const input = @import("../../input.zig");
 const internal_os = @import("../../os/main.zig");
+const global = @import("../../global.zig");
 const CoreSurface = @import("../../Surface.zig");
 const CoreApp = @import("../../App.zig");
 const windows = internal_os.win32;
@@ -321,8 +322,8 @@ pub fn setClipboard(
     }
 }
 
-pub fn defaultTermioEnv(self: *Self) !std.process.EnvMap {
-    return internal_os.getEnvMap(self.rtApp().alloc) catch |err| {
+pub fn defaultTermioEnv(_: *Self) !std.process.Environ.Map {
+    return global.environMap() catch |err| {
         log.err("failed to get environment: {}", .{err});
         return err;
     };

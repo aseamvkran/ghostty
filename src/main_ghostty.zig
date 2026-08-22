@@ -59,18 +59,6 @@ pub fn main(minimal: std.process.Init.Minimal) !MainReturn {
     defer global.deinit();
     const alloc = global.alloc();
 
-    // A Windows-subsystem exe has no console, so stderr goes nowhere and only
-    // costs us. Logs land in the file sink instead, unless GHOSTTY_LOG is set.
-    if (comptime builtin.os.tag == .windows) {
-        if (state.action == null) {
-            if (internal_os.getenv(alloc, "GHOSTTY_LOG") catch null) |v| {
-                v.deinit(alloc);
-            } else {
-                state.logging.stderr = false;
-            }
-        }
-    }
-
     if (comptime builtin.mode == .Debug) {
         std.log.warn("This is a debug build. Performance will be very poor.", .{});
         std.log.warn("You should only use a debug build for developing Ghostty.", .{});
@@ -131,25 +119,35 @@ pub fn main(minimal: std.process.Init.Minimal) !MainReturn {
 /// to a file. Everything here is guarded by `mutex`, including the lazy open:
 /// callers already hold it to write, so a second init lock buys nothing.
 const Win32Log = struct {
-    var mutex: std.Thread.Mutex = .{};
-    var file: ?std.fs.File = null;
+    var mutex: std.Io.Mutex = .init;
+    var file: ?std.Io.File = null;
     var opened: bool = false;
 
     /// Caller must hold `mutex`.
-    fn getFile() ?std.fs.File {
+    fn getFile() ?std.Io.File {
         if (opened) return file;
         opened = true;
 
-        const alloc = std.heap.page_allocator;
-        const dir = internal_os.xdg.state(alloc, .{ .subdir = "ghostty" }) catch return null;
+        // Safe to reach global state here: init assigns it before any log
+        // output, and logFn's stderr branch already depends on that.
+        const io = global.io();
+        const alloc = global.alloc();
+
+        var environ_map = global.environMap() catch return null;
+        defer environ_map.deinit();
+
+        const dir = internal_os.xdg.state(io, alloc, &environ_map, .{
+            .subdir = "ghostty",
+        }) catch return null;
         defer alloc.free(dir);
 
-        std.fs.cwd().makePath(dir) catch {};
+        const cwd = std.Io.Dir.cwd();
+        cwd.createDirPath(io, dir) catch {};
 
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         const path = std.fmt.bufPrint(&buf, "{s}\\ghostty.log", .{dir}) catch return null;
 
-        file = std.fs.cwd().createFile(path, .{}) catch null;
+        file = cwd.createFile(io, path, .{}) catch null;
         return file;
     }
 };
@@ -195,8 +193,10 @@ fn logFn(
 
         // Lock so log lines from different threads don't interleave. This
         // also guards the lazy open in getFile.
-        Win32Log.mutex.lock();
-        defer Win32Log.mutex.unlock();
+        // lockUncancelable: logging must never fail or introduce a
+        // cancelation point.
+        Win32Log.mutex.lockUncancelable(global.io());
+        defer Win32Log.mutex.unlock(global.io());
 
         const log_file = Win32Log.getFile() orelse break :win32_log;
 
@@ -206,7 +206,7 @@ fn logFn(
         // writerStreaming, not writer: the default writer is positional and
         // starts at offset 0, so a fresh writer per call would rewrite the
         // first line every time instead of appending.
-        var file_writer = log_file.writerStreaming(&buf);
+        var file_writer = log_file.writerStreaming(global.io(), &buf);
         const writer = &file_writer.interface;
         nosuspend writer.print(level_txt ++ prefix ++ format ++ "\n", args) catch break :win32_log;
         nosuspend writer.flush() catch break :win32_log;

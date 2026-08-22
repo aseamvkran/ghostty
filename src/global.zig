@@ -394,8 +394,13 @@ pub const GlobalState = struct {
     /// Where logging should go
     pub const Logging = packed struct {
         /// Whether to log to stderr. For lib mode we always disable stderr
-        /// logging by default. Otherwise it's enabled by default.
-        stderr: bool = build_config.app_runtime != .none,
+        /// logging by default. The Win32 exe is built with subsystem=Windows
+        /// and so has no console for stderr to reach; it logs to a file
+        /// instead. Otherwise it's enabled by default. GHOSTTY_LOG overrides.
+        stderr: bool = switch (build_config.app_runtime) {
+            .none, .win32 => false,
+            .gtk => true,
+        },
         /// Whether to log to macOS's unified logging. Enabled by default
         /// on macOS.
         macos: bool = builtin.os.tag.isDarwin(),
