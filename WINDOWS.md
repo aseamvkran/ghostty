@@ -26,7 +26,7 @@ giving Windows users:
 
 ### Requirements
 
-- **Zig 0.15.2** — install via `scoop install zig@0.15.2` or from [ziglang.org](https://ziglang.org/download/)
+- **Zig 0.16.0** — install via `scoop install zig@0.16.0` or from [ziglang.org](https://ziglang.org/download/)
 - **Windows SDK** (MSVC) — included with Visual Studio Build Tools
 - **OpenGL 4.3+** capable GPU
 
@@ -55,11 +55,12 @@ command = pwsh.exe
 ### Test
 
 ```powershell
-# Run Win32-specific tests
-zig build test -Dtest-filter="Tab"
+# Split tree, divider drag, and search count tests
+zig build test -Dtest-filter="Tab."
+zig build test -Dtest-filter="App.formatSearchCount"
 
-# Run search count format tests
-zig build test -Dtest-filter="search count"
+# Full suite
+zig build test
 ```
 
 ## Architecture
